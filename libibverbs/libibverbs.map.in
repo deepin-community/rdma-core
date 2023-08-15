@@ -10,7 +10,6 @@ IBVERBS_1.0 {
 		ibv_get_async_event;
 		ibv_ack_async_event;
 		ibv_query_device;
-		ibv_query_device_ex;
 		ibv_query_port;
 		ibv_query_gid;
 		ibv_query_pkey;
@@ -172,6 +171,7 @@ IBVERBS_PRIVATE_@IBVERBS_PABI_VERSION@ {
 	global:
 		/* These historical symbols are now private to libibverbs */
 		__ioctl_final_num_attrs;
+		__verbs_log;
 		_verbs_init_and_alloc_context;
 		execute_ioctl;
 		ibv_cmd_advise_mr;

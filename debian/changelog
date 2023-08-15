@@ -1,14 +1,62 @@
-rdma-core (36.0.1-1+dde) UNRELEASED; urgency=medium
+rdma-core (48.0-1) unstable; urgency=medium
 
-  * update
+  * New upstream release.
 
- -- Benjamin Drung <benjamin.drung@ionos.com>  Wed, 27 Jul 2022 08:54:48 +0800
+ -- Jason Gunthorpe <jgg@obsidianresearch.com>  Tue, 03 Jan 2023 17:46:57 +0100
 
-rdma-core (36.0.1-1+dde) unstable; urgency=medium
+rdma-core (44.0-1) unstable; urgency=medium
 
-  * Add sunway support.
+  * New upstream release.
+    - Add Microsoft Azure Network Adapter (MANA) RDMA provider
+    - util: mmio: fix build on MIPS with binutils >= 2.35
+  * Add 64-bit MIPS architectures to COHERENT_DMA_ARCHS (Closes: #1026088)
+  * debian/watch: Query api.github.com for release tarballs
 
- -- Miao Changwei <miaochangwei@uniontech.com>  Tue, 19 Apr 2022 15:34:21 +0800
+ -- Benjamin Drung <bdrung@ubuntu.com>  Tue, 03 Jan 2023 17:29:32 +0100
+
+rdma-core (43.0-1) unstable; urgency=medium
+
+  * New upstream release.
+    - Install 70-persistent-ipoib.rules into docs instead of /etc
+      (Closes: #958385)
+
+ -- Benjamin Drung <bdrung@ubuntu.com>  Mon, 24 Oct 2022 18:21:42 +0200
+
+rdma-core (42.0-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Update overrides for lintian 2.115.2
+  * Bump Standards-Version to 4.6.1
+
+ -- Benjamin Drung <bdrung@ubuntu.com>  Thu, 18 Aug 2022 15:24:14 +0200
+
+rdma-core (40.0-1) unstable; urgency=medium
+
+  [ Benjamin Drung ]
+  * New upstream release.
+  * Update my email address to @ubuntu.com
+
+  [ Heinrich Schuchardt ]
+  * Add riscv64 to COHERENT_DMA_ARCHS
+
+ -- Benjamin Drung <bdrung@ubuntu.com>  Mon, 16 May 2022 13:55:12 +0200
+
+rdma-core (39.0-1) unstable; urgency=medium
+
+  * New upstream release.
+  * Remove i40iw provider conffile (Closes: #1000562)
+  * Update overrides for lintian 2.114
+  * Override obsolete-command-in-modprobe.d-file lintian error
+  * Override spare-manual-page lintian complaint
+
+ -- Benjamin Drung <benjamin.drung@ionos.com>  Thu, 27 Jan 2022 19:57:04 +0100
+
+rdma-core (38.0-1) unstable; urgency=medium
+
+  * New upstream release.
+  * debian: Add __verbs_log to private libibverbs symbols
+
+ -- Benjamin Drung <benjamin.drung@ionos.com>  Fri, 19 Nov 2021 17:57:18 +0100
 
 rdma-core (36.0-2) unstable; urgency=medium
 

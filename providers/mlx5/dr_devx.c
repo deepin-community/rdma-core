@@ -53,6 +53,7 @@ int dr_devx_query_esw_vport_context(struct ibv_context *ctx,
 
 	err = mlx5dv_devx_general_cmd(ctx, in, sizeof(in), out, sizeof(out));
 	if (err) {
+		err = mlx5_get_cmd_status_err(err, out);
 		dr_dbg_ctx(ctx, "Query eswitch vport context failed %d\n", err);
 		return err;
 	}
@@ -77,6 +78,7 @@ static int dr_devx_query_nic_vport_context(struct ibv_context *ctx,
 		 MLX5_CMD_OP_QUERY_NIC_VPORT_CONTEXT);
 	err = mlx5dv_devx_general_cmd(ctx, in, sizeof(in), out, sizeof(out));
 	if (err) {
+		err = mlx5_get_cmd_status_err(err, out);
 		dr_dbg_ctx(ctx, "Query nic vport context failed %d\n", err);
 		return err;
 	}
@@ -102,12 +104,51 @@ int dr_devx_query_gvmi(struct ibv_context *ctx, bool other_vport,
 
 	err = mlx5dv_devx_general_cmd(ctx, in, sizeof(in), out, sizeof(out));
 	if (err) {
+		err = mlx5_get_cmd_status_err(err, out);
 		dr_dbg_ctx(ctx, "Query general failed %d\n", err);
 		return err;
 	}
 
 	*gvmi = DEVX_GET(query_hca_cap_out, out, capability.cmd_hca_cap.vhca_id);
 
+	return 0;
+}
+
+static int dr_devx_query_esw_func(struct ibv_context *ctx,
+				  uint16_t max_sfs,
+				  bool *host_pf_vhca_id_valid,
+				  uint16_t *host_pf_vhca_id)
+{
+	uint32_t in[DEVX_ST_SZ_DW(query_esw_functions_in)] = {};
+	size_t outsz;
+	void *out;
+	int err;
+
+	outsz = DEVX_ST_SZ_BYTES(query_esw_functions_out) +
+		(max_sfs - 1) * DEVX_FLD_SZ_BYTES(query_esw_functions_out, host_sf_enable);
+	out = calloc(1, outsz);
+	if (!out) {
+		errno = ENOMEM;
+		return errno;
+	}
+
+	DEVX_SET(query_esw_functions_in, in, opcode,
+		 MLX5_CMD_OP_QUERY_ESW_FUNCTIONS);
+
+	err = mlx5dv_devx_general_cmd(ctx, in, sizeof(in), out, outsz);
+	if (err) {
+		err = mlx5_get_cmd_status_err(err, out);
+		dr_dbg_ctx(ctx, "Query esw func failed %d\n", err);
+		free(out);
+		return err;
+	}
+
+	*host_pf_vhca_id_valid = DEVX_GET(query_esw_functions_out, out,
+					  host_params_context.host_pf_vhca_id_valid);
+
+	*host_pf_vhca_id = DEVX_GET(query_esw_functions_out, out,
+				    host_params_context.host_pf_vhca_id);
+	free(out);
 	return 0;
 }
 
@@ -125,6 +166,7 @@ int dr_devx_query_esw_caps(struct ibv_context *ctx, struct dr_esw_caps *caps)
 
 	err = mlx5dv_devx_general_cmd(ctx, in, sizeof(in), out, sizeof(out));
 	if (err) {
+		err = mlx5_get_cmd_status_err(err, out);
 		dr_dbg_ctx(ctx, "Query general failed %d\n", err);
 		return err;
 	}
@@ -156,7 +198,10 @@ int dr_devx_query_device(struct ibv_context *ctx, struct dr_devx_caps *caps)
 {
 	uint32_t out[DEVX_ST_SZ_DW(query_hca_cap_out)] = {};
 	uint32_t in[DEVX_ST_SZ_DW(query_hca_cap_in)] = {};
-	bool roce;
+	bool host_pf_vhca_id_valid = false;
+	uint16_t host_pf_vhca_id = 0;
+	uint32_t max_sfs = 0;
+	bool roce, sf_supp;
 	int err;
 
 	DEVX_SET(query_hca_cap_in, in, opcode, MLX5_CMD_OP_QUERY_HCA_CAP);
@@ -166,6 +211,7 @@ int dr_devx_query_device(struct ibv_context *ctx, struct dr_devx_caps *caps)
 
 	err = mlx5dv_devx_general_cmd(ctx, in, sizeof(in), out, sizeof(out));
 	if (err) {
+		err = mlx5_get_cmd_status_err(err, out);
 		dr_dbg_ctx(ctx, "Query general failed %d\n", err);
 		return err;
 	}
@@ -182,6 +228,7 @@ int dr_devx_query_device(struct ibv_context *ctx, struct dr_devx_caps *caps)
 	caps->flex_parser_header_modify =
 		DEVX_GET(query_hca_cap_out, out,
 			 capability.cmd_hca_cap.flex_parser_header_modify);
+	sf_supp = DEVX_GET(query_hca_cap_out, out, capability.cmd_hca_cap.sf);
 	caps->definer_format_sup =
 		DEVX_GET64(query_hca_cap_out, out,
 			   capability.cmd_hca_cap.match_definer_format_supported);
@@ -189,6 +236,22 @@ int dr_devx_query_device(struct ibv_context *ctx, struct dr_devx_caps *caps)
 
 	caps->sw_format_ver = DEVX_GET(query_hca_cap_out, out,
 				       capability.cmd_hca_cap.steering_format_version);
+	caps->support_modify_argument = DEVX_GET64(query_hca_cap_out, out,
+			capability.cmd_hca_cap.general_obj_types) &
+			(1LL << MLX5_OBJ_TYPE_HEADER_MODIFY_ARGUMENT);
+
+	caps->roce_caps.fl_rc_qp_when_roce_disabled = DEVX_GET(query_hca_cap_out, out,
+					capability.cmd_hca_cap.fl_rc_qp_when_roce_disabled);
+
+	if (caps->support_modify_argument) {
+		caps->log_header_modify_argument_granularity =
+			DEVX_GET(query_hca_cap_out, out,
+			capability.cmd_hca_cap.log_header_modify_argument_granularity);
+
+		caps->log_header_modify_argument_max_alloc =
+			DEVX_GET(query_hca_cap_out, out,
+			capability.cmd_hca_cap.log_header_modify_argument_max_alloc);
+	}
 
 	if (caps->flex_protocols & MLX5_FLEX_PARSER_ICMP_V4_ENABLED) {
 		caps->flex_parser_id_icmp_dw0 =
@@ -260,6 +323,7 @@ int dr_devx_query_device(struct ibv_context *ctx, struct dr_devx_caps *caps)
 
 	err = mlx5dv_devx_general_cmd(ctx, in, sizeof(in), out, sizeof(out));
 	if (err) {
+		err = mlx5_get_cmd_status_err(err, out);
 		dr_dbg_ctx(ctx, "Query flow tables failed %d\n", err);
 		return err;
 	}
@@ -299,12 +363,60 @@ int dr_devx_query_device(struct ibv_context *ctx, struct dr_devx_caps *caps)
 					       ft_field_bitmask_support_2_nic_receive.
 					       outer_l4_checksum_ok);
 
+	/* geneve_tlv_option_0_exist is the indication for STE support for
+	 * lookup type flex_parser_ok.
+	 */
+	caps->flex_parser_ok_bits_supp = DEVX_GET(query_hca_cap_out, out,
+						  capability.flow_table_nic_cap.
+						  flow_table_properties_nic_receive.
+						  ft_field_support.
+						  geneve_tlv_option_0_exist);
+	caps->support_full_tnl_hdr = (DEVX_GET(query_hca_cap_out, out,
+					       capability.flow_table_nic_cap.
+					       ft_field_bitmask_support_2_nic_receive.
+					       tunnel_header_0_1) &&
+				      DEVX_GET(query_hca_cap_out, out,
+					       capability.flow_table_nic_cap.
+					       ft_field_bitmask_support_2_nic_receive.
+					       tunnel_header_2_3));
+
+	if (sf_supp && caps->eswitch_manager) {
+		DEVX_SET(query_hca_cap_in, in, op_mod,
+			 MLX5_SET_HCA_CAP_OP_MOD_ESW | HCA_CAP_OPMOD_GET_CUR);
+
+		err = mlx5dv_devx_general_cmd(ctx, in, sizeof(in), out, sizeof(out));
+		if (err) {
+			err = mlx5_get_cmd_status_err(err, out);
+			dr_dbg_ctx(ctx, "Query eswitch capabilities failed %d\n", err);
+			return err;
+		}
+		max_sfs = 1 << DEVX_GET(query_hca_cap_out, out,
+					capability.e_switch_cap.log_max_esw_sf);
+	}
+
+	if (caps->eswitch_manager) {
+		/* Check if ECPF */
+		if (DEVX_GET(query_hca_cap_out, out,
+			     capability.e_switch_cap.esw_manager_vport_number_valid)) {
+			if (DEVX_GET(query_hca_cap_out, out,
+				     capability.e_switch_cap.esw_manager_vport_number) == ECPF_PORT)
+				caps->is_ecpf = true;
+		} else {
+			err = dr_devx_query_esw_func(ctx, max_sfs,
+						     &host_pf_vhca_id_valid,
+						     &host_pf_vhca_id);
+			if (!err && host_pf_vhca_id_valid && host_pf_vhca_id != caps->gvmi)
+				caps->is_ecpf = true;
+		}
+	}
+
 	DEVX_SET(query_hca_cap_in, in, op_mod,
 		 MLX5_SET_HCA_CAP_OP_MOD_DEVICE_MEMORY |
 		 HCA_CAP_OPMOD_GET_CUR);
 
 	err = mlx5dv_devx_general_cmd(ctx, in, sizeof(in), out, sizeof(out));
 	if (err) {
+		err = mlx5_get_cmd_status_err(err, out);
 		dr_dbg_ctx(ctx, "Query flow device memory caps failed %d\n", err);
 		return err;
 	}
@@ -316,6 +428,14 @@ int dr_devx_query_device(struct ibv_context *ctx, struct dr_devx_caps *caps)
 					       header_modify_sw_icm_start_address);
 	caps->log_modify_hdr_icm_size = DEVX_GET(query_hca_cap_out, out,
 						 capability.device_mem_cap.log_header_modify_sw_icm_size);
+
+	caps->log_modify_pattern_icm_size =
+		DEVX_GET(query_hca_cap_out, out,
+			 capability.device_mem_cap.log_header_modify_pattern_sw_icm_size);
+
+	caps->hdr_modify_pattern_icm_addr =
+		DEVX_GET64(query_hca_cap_out, out,
+			   capability.device_mem_cap.header_modify_pattern_sw_icm_start_address);
 
 	/* RoCE caps */
 	if (roce) {
@@ -330,10 +450,11 @@ int dr_devx_query_device(struct ibv_context *ctx, struct dr_devx_caps *caps)
 
 		err = mlx5dv_devx_general_cmd(ctx, in, sizeof(in), out, sizeof(out));
 		if (err) {
+			err = mlx5_get_cmd_status_err(err, out);
 			dr_dbg_ctx(ctx, "Query RoCE capabilities failed %d\n", err);
 			return err;
 		}
-		caps->roce_caps.fl_rc_qp_when_roce_disabled = DEVX_GET(query_hca_cap_out, out,
+		caps->roce_caps.fl_rc_qp_when_roce_disabled |= DEVX_GET(query_hca_cap_out, out,
 					      capability.roce_caps.fl_rc_qp_when_roce_disabled);
 		caps->roce_caps.fl_rc_qp_when_roce_enabled = DEVX_GET(query_hca_cap_out, out,
 					      capability.roce_caps.fl_rc_qp_when_roce_enabled);
@@ -353,8 +474,10 @@ int dr_devx_sync_steering(struct ibv_context *ctx)
 	DEVX_SET(sync_steering_in, in, opcode, MLX5_CMD_OP_SYNC_STEERING);
 
 	err = mlx5dv_devx_general_cmd(ctx, in, sizeof(in), out, sizeof(out));
-	if (err)
+	if (err) {
+		err = mlx5_get_cmd_status_err(err, out);
 		dr_dbg_ctx(ctx, "Sync steering failed %d\n", err);
+	}
 
 	return err;
 }
@@ -365,6 +488,7 @@ dr_devx_create_flow_table(struct ibv_context *ctx,
 {
 	uint32_t out[DEVX_ST_SZ_DW(create_flow_table_out)] = {};
 	uint32_t in[DEVX_ST_SZ_DW(create_flow_table_in)] = {};
+	struct mlx5dv_devx_obj *obj;
 	void *ft_ctx;
 
 	DEVX_SET(create_flow_table_in, in, opcode, MLX5_CMD_OP_CREATE_FLOW_TABLE);
@@ -396,7 +520,11 @@ dr_devx_create_flow_table(struct ibv_context *ctx,
 		}
 	}
 
-	return mlx5dv_devx_obj_create(ctx, in, sizeof(in), out, sizeof(out));
+	obj = mlx5dv_devx_obj_create(ctx, in, sizeof(in), out, sizeof(out));
+	if (!obj)
+		errno = mlx5_get_cmd_status_err(errno, out);
+	return obj;
+
 }
 
 int dr_devx_query_flow_table(struct mlx5dv_devx_obj *obj, uint32_t type,
@@ -414,7 +542,7 @@ int dr_devx_query_flow_table(struct mlx5dv_devx_obj *obj, uint32_t type,
 	if (ret) {
 		dr_dbg_ctx(obj->context, "Failed to query flow table id %u\n",
 			   obj->object_id);
-		return ret;
+		return mlx5_get_cmd_status_err(ret, out);
 	}
 
 	*tx_icm_addr = DEVX_GET64(query_flow_table_out, out,
@@ -445,6 +573,9 @@ dr_devx_create_flow_group(struct ibv_context *ctx,
 	DEVX_SET(create_flow_group_in, in, table_id, fg_attr->table_id);
 
 	obj = mlx5dv_devx_obj_create(ctx, in, inlen, out, sizeof(out));
+	if (!obj)
+		errno = mlx5_get_cmd_status_err(errno, out);
+
 	free(in);
 
 	return obj;
@@ -550,6 +681,8 @@ dr_devx_set_fte(struct ibv_context *ctx,
 	}
 
 	obj = mlx5dv_devx_obj_create(ctx, in, inlen, out, sizeof(out));
+	if (!obj)
+		errno = mlx5_get_cmd_status_err(errno, out);
 
 	free(in);
 	return obj;
@@ -625,6 +758,7 @@ dr_devx_create_flow_sampler(struct ibv_context *ctx,
 {
 	uint32_t out[DEVX_ST_SZ_DW(general_obj_out_cmd_hdr)] = {};
 	uint32_t in[DEVX_ST_SZ_DW(create_flow_sampler_in)] = {};
+	struct mlx5dv_devx_obj *obj;
 	void *attr;
 
 	attr = DEVX_ADDR_OF(create_flow_sampler_in, in, hdr);
@@ -644,7 +778,10 @@ dr_devx_create_flow_sampler(struct ibv_context *ctx,
 	DEVX_SET(flow_sampler, attr, sample_table_id,
 		 sampler_attr->sample_table_id);
 
-	return mlx5dv_devx_obj_create(ctx, in, sizeof(in), out, sizeof(out));
+	obj = mlx5dv_devx_obj_create(ctx, in, sizeof(in), out, sizeof(out));
+	if (!obj)
+		errno = mlx5_get_cmd_status_err(errno, out);
+	return obj;
 }
 
 int dr_devx_query_flow_sampler(struct mlx5dv_devx_obj *obj,
@@ -665,7 +802,7 @@ int dr_devx_query_flow_sampler(struct mlx5dv_devx_obj *obj,
 	if (ret) {
 		dr_dbg_ctx(obj->context, "Failed to query flow sampler id %u\n",
 			   obj->object_id);
-		return ret;
+		return mlx5_get_cmd_status_err(ret, out);
 	}
 
 	attr = DEVX_ADDR_OF(query_flow_sampler_out, out, obj);
@@ -683,6 +820,7 @@ struct mlx5dv_devx_obj *dr_devx_create_definer(struct ibv_context *ctx,
 {
 	uint32_t out[DEVX_ST_SZ_DW(general_obj_out_cmd_hdr)] = {};
 	uint32_t in[DEVX_ST_SZ_DW(create_definer_in)] = {};
+	struct mlx5dv_devx_obj *obj;
 	void *ptr;
 
 	DEVX_SET(general_obj_in_cmd_hdr,
@@ -696,7 +834,10 @@ struct mlx5dv_devx_obj *dr_devx_create_definer(struct ibv_context *ctx,
 	ptr = DEVX_ADDR_OF(definer, ptr, match_mask_dw_7_0);
 	memcpy(ptr, match_mask, DEVX_FLD_SZ_BYTES(definer, match_mask_dw_7_0));
 
-	return mlx5dv_devx_obj_create(ctx, in, sizeof(in), out, sizeof(out));
+	obj = mlx5dv_devx_obj_create(ctx, in, sizeof(in), out, sizeof(out));
+	if (!obj)
+		errno = mlx5_get_cmd_status_err(errno, out);
+	return obj;
 }
 
 struct mlx5dv_devx_obj *dr_devx_create_reformat_ctx(struct ibv_context *ctx,
@@ -732,6 +873,8 @@ struct mlx5dv_devx_obj *dr_devx_create_reformat_ctx(struct ibv_context *ctx,
 	memcpy(pdata, reformat_data, reformat_size);
 
 	obj = mlx5dv_devx_obj_create(ctx, in, insz, out, sizeof(out));
+	if (!obj)
+		errno = mlx5_get_cmd_status_err(errno, out);
 	free(in);
 
 	return obj;
@@ -743,6 +886,7 @@ struct mlx5dv_devx_obj *dr_devx_create_meter(struct ibv_context *ctx,
 {
 	uint32_t out[DEVX_ST_SZ_DW(general_obj_out_cmd_hdr)] = {};
 	uint32_t in[DEVX_ST_SZ_DW(create_flow_meter_in)] = {};
+	struct mlx5dv_devx_obj *obj;
 	void *attr;
 
 	if (meter_attr->flow_meter_parameter_sz >
@@ -769,7 +913,10 @@ struct mlx5dv_devx_obj *dr_devx_create_meter(struct ibv_context *ctx,
 	memcpy(attr, meter_attr->flow_meter_parameter,
 	       meter_attr->flow_meter_parameter_sz);
 
-	return mlx5dv_devx_obj_create(ctx, in, sizeof(in), out, sizeof(out));
+	obj = mlx5dv_devx_obj_create(ctx, in, sizeof(in), out, sizeof(out));
+	if (!obj)
+		errno = mlx5_get_cmd_status_err(errno, out);
+	return obj;
 }
 
 int dr_devx_query_meter(struct mlx5dv_devx_obj *obj, uint64_t *rx_icm_addr,
@@ -790,7 +937,7 @@ int dr_devx_query_meter(struct mlx5dv_devx_obj *obj, uint64_t *rx_icm_addr,
 	if (ret) {
 		dr_dbg_ctx(obj->context, "Failed to query flow meter id %u\n",
 			   obj->object_id);
-		return ret;
+		return mlx5_get_cmd_status_err(ret, out);
 	}
 
 	attr = DEVX_ADDR_OF(query_flow_meter_out, out, obj);
@@ -807,6 +954,7 @@ int dr_devx_modify_meter(struct mlx5dv_devx_obj *obj,
 	uint32_t out[DEVX_ST_SZ_DW(general_obj_out_cmd_hdr)] = {};
 	uint32_t in[DEVX_ST_SZ_DW(create_flow_meter_in)] = {};
 	void *attr;
+	int ret;
 
 	if (meter_attr->flow_meter_parameter_sz >
 	    DEVX_FLD_SZ_BYTES(flow_meter, flow_meter_params)) {
@@ -831,7 +979,8 @@ int dr_devx_modify_meter(struct mlx5dv_devx_obj *obj,
 	memcpy(attr, meter_attr->flow_meter_parameter,
 	       meter_attr->flow_meter_parameter_sz);
 
-	return mlx5dv_devx_obj_modify(obj, in, sizeof(in), out, sizeof(out));
+	ret = mlx5dv_devx_obj_modify(obj, in, sizeof(in), out, sizeof(out));
+	return ret ? mlx5_get_cmd_status_err(ret, out) : 0;
 }
 
 struct mlx5dv_devx_obj *dr_devx_create_qp(struct ibv_context *ctx,
@@ -840,6 +989,7 @@ struct mlx5dv_devx_obj *dr_devx_create_qp(struct ibv_context *ctx,
 	uint32_t in[DEVX_ST_SZ_DW(create_qp_in)] = {};
 	uint32_t out[DEVX_ST_SZ_DW(create_qp_out)] = {};
 	void *qpc = DEVX_ADDR_OF(create_qp_in, in, qpc);
+	struct mlx5dv_devx_obj *obj;
 
 	DEVX_SET(create_qp_in, in, opcode, MLX5_CMD_OP_CREATE_QP);
 
@@ -858,7 +1008,10 @@ struct mlx5dv_devx_obj *dr_devx_create_qp(struct ibv_context *ctx,
 
 	DEVX_SET(create_qp_in, in, wq_umem_id, attr->buff_umem_id);
 
-	return mlx5dv_devx_obj_create(ctx, in, sizeof(in), out, sizeof(out));
+	obj = mlx5dv_devx_obj_create(ctx, in, sizeof(in), out, sizeof(out));
+	if (!obj)
+		errno = mlx5_get_cmd_status_err(errno, out);
+	return obj;
 }
 
 int dr_devx_modify_qp_rst2init(struct ibv_context *ctx,
@@ -868,6 +1021,7 @@ int dr_devx_modify_qp_rst2init(struct ibv_context *ctx,
 	uint32_t in[DEVX_ST_SZ_DW(rst2init_qp_in)] = {};
 	uint32_t out[DEVX_ST_SZ_DW(rst2init_qp_out)] = {};
 	void *qpc = DEVX_ADDR_OF(rst2init_qp_in, in, qpc);
+	int ret;
 
 	DEVX_SET(rst2init_qp_in, in, opcode, MLX5_CMD_OP_RST2INIT_QP);
 	DEVX_SET(rst2init_qp_in, in, qpn, qp_obj->object_id);
@@ -877,8 +1031,8 @@ int dr_devx_modify_qp_rst2init(struct ibv_context *ctx,
 	DEVX_SET(qpc, qpc, rre, 1);
 	DEVX_SET(qpc, qpc, rwe, 1);
 
-	return mlx5dv_devx_obj_modify(qp_obj, in,
-				      sizeof(in), out, sizeof(out));
+	ret = mlx5dv_devx_obj_modify(qp_obj, in, sizeof(in), out, sizeof(out));
+	return ret ? mlx5_get_cmd_status_err(ret, out) : 0;
 }
 
 #define DR_DEVX_ICM_UDP_PORT 49999
@@ -890,6 +1044,7 @@ int dr_devx_modify_qp_init2rtr(struct ibv_context *ctx,
 	uint32_t in[DEVX_ST_SZ_DW(init2rtr_qp_in)] = {};
 	uint32_t out[DEVX_ST_SZ_DW(init2rtr_qp_out)] = {};
 	void *qpc = DEVX_ADDR_OF(init2rtr_qp_in, in, qpc);
+	int ret;
 
 	DEVX_SET(init2rtr_qp_in, in, opcode, MLX5_CMD_OP_INIT2RTR_QP);
 	DEVX_SET(init2rtr_qp_in, in, qpn, qp_obj->object_id);
@@ -915,8 +1070,8 @@ int dr_devx_modify_qp_init2rtr(struct ibv_context *ctx,
 	DEVX_SET(qpc, qpc, primary_address_path.vhca_port_num, attr->port_num);
 	DEVX_SET(qpc, qpc, min_rnr_nak, 1);
 
-	return mlx5dv_devx_obj_modify(qp_obj, in,
-				      sizeof(in), out, sizeof(out));
+	ret = mlx5dv_devx_obj_modify(qp_obj, in, sizeof(in), out, sizeof(out));
+	return ret ? mlx5_get_cmd_status_err(ret, out) : 0;
 }
 
 int dr_devx_modify_qp_rtr2rts(struct ibv_context *ctx,
@@ -926,6 +1081,7 @@ int dr_devx_modify_qp_rtr2rts(struct ibv_context *ctx,
 	uint32_t in[DEVX_ST_SZ_DW(rtr2rts_qp_in)] = {};
 	uint32_t out[DEVX_ST_SZ_DW(rtr2rts_qp_out)] = {};
 	void *qpc = DEVX_ADDR_OF(rtr2rts_qp_in, in, qpc);
+	int ret;
 
 	DEVX_SET(rtr2rts_qp_in, in, opcode, MLX5_CMD_OP_RTR2RTS_QP);
 	DEVX_SET(rtr2rts_qp_in, in, qpn, qp_obj->object_id);
@@ -934,8 +1090,10 @@ int dr_devx_modify_qp_rtr2rts(struct ibv_context *ctx,
 	DEVX_SET(qpc, qpc, retry_count, attr->retry_cnt);
 	DEVX_SET(qpc, qpc, rnr_retry, attr->rnr_retry);
 
-	return mlx5dv_devx_obj_modify(qp_obj, in,
-				      sizeof(in), out, sizeof(out));
+	DEVX_SET(qpc, qpc, primary_address_path.ack_timeout, 0x8); /* ~1ms */
+
+	ret = mlx5dv_devx_obj_modify(qp_obj, in, sizeof(in), out, sizeof(out));
+	return ret ? mlx5_get_cmd_status_err(ret, out) : 0;
 }
 
 int dr_devx_query_gid(struct ibv_context *ctx, uint8_t vhca_port_num,
@@ -953,7 +1111,7 @@ int dr_devx_query_gid(struct ibv_context *ctx, uint8_t vhca_port_num,
 
 	ret = mlx5dv_devx_general_cmd(ctx, in, sizeof(in), out, sizeof(out));
 	if (ret)
-		return ret;
+		return mlx5_get_cmd_status_err(ret, out);
 
 	memcpy(&attr->gid,
 	       DEVX_ADDR_OF(query_roce_address_out,
@@ -971,4 +1129,25 @@ int dr_devx_query_gid(struct ibv_context *ctx, uint8_t vhca_port_num,
 		attr->roce_ver = MLX5_ROCE_VERSION_1;
 
 	return 0;
+}
+
+struct mlx5dv_devx_obj *dr_devx_create_modify_header_arg(struct ibv_context *ctx,
+							 uint16_t log_obj_range,
+							 uint32_t pd)
+{
+	uint32_t out[DEVX_ST_SZ_DW(general_obj_out_cmd_hdr)] = {};
+	uint32_t in[DEVX_ST_SZ_DW(create_modify_header_arg_in)] = {};
+	void *attr;
+
+	attr = DEVX_ADDR_OF(create_modify_header_arg_in, in, hdr);
+	DEVX_SET(general_obj_in_cmd_hdr,
+		 attr, opcode, MLX5_CMD_OP_CREATE_GENERAL_OBJECT);
+	DEVX_SET(general_obj_in_cmd_hdr,
+		 attr, obj_type, MLX5_OBJ_TYPE_HEADER_MODIFY_ARGUMENT);
+	DEVX_SET(general_obj_in_cmd_hdr,
+		 attr, log_obj_range, log_obj_range);
+	attr = DEVX_ADDR_OF(create_modify_header_arg_in, in, arg);
+	DEVX_SET(modify_header_arg, attr, access_pd, pd);
+
+	return mlx5dv_devx_obj_create(ctx, in, sizeof(in), out, sizeof(out));
 }
