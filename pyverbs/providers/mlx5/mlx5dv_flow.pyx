@@ -16,15 +16,18 @@ import weakref
 
 
 cdef class Mlx5FlowMatchParameters(PyverbsObject):
-    def __init__(self, size=0, values=bytes()):
+    def __init__(self, size, values):
         """
         Initialize a Mlx5FlowMatchParameters object over an underlying
         mlx5dv_flow_match_parameters C object that defines match parameters for
         steering flow.
         :param size: Length of the mask/value in bytes
         :param values: Bytes with mask/value to use in format of Flow Table
-                       Entry Match Parameters Format table in PRM.
+                       Entry Match Parameters Format table in PRM or instance
+                       of FlowTableEntryMatchParam class.
+
         """
+        cdef char *py_bytes_c
         super().__init__()
         struct_size = sizeof(size_t) + size
         self.params = <dv.mlx5dv_flow_match_parameters *>calloc(1, struct_size)
@@ -32,14 +35,17 @@ cdef class Mlx5FlowMatchParameters(PyverbsObject):
             raise PyverbsError(f'Failed to allocate buffer of size {struct_size}')
         self.params.match_sz = size
         if size:
-            memcpy(self.params.match_buf, <char*>values, size)
+            py_bytes = bytes(values)
+            py_bytes_c = py_bytes
+            memcpy(self.params.match_buf, py_bytes_c, len(values))
 
     def __dealloc__(self):
         self.close()
 
     cpdef close(self):
         if self.params != NULL:
-            self.logger.debug('Closing Mlx5FlowMatchParameters')
+            if self.logger:
+                self.logger.debug('Closing Mlx5FlowMatchParameters')
             free(self.params)
             self.params = NULL
 
@@ -118,7 +124,8 @@ cdef class Mlx5FlowMatcher(PyverbsObject):
 
     cpdef close(self):
         if self.flow_matcher != NULL:
-            self.logger.debug('Closing Mlx5FlowMatcher')
+            if self.logger:
+                self.logger.debug('Closing Mlx5FlowMatcher')
             close_weakrefs([self.flows])
             rc = dv.mlx5dv_destroy_flow_matcher(self.flow_matcher)
             if rc:
@@ -132,8 +139,8 @@ cdef class Mlx5PacketReformatFlowAction(FlowAction):
                  ft_type=dv.MLX5DV_FLOW_TABLE_TYPE_NIC_RX):
         """
         Initialize a Mlx5PacketReformatFlowAction object derived from FlowAction
-        class and represents reformat flow steering action that allows to
-        add/remove packet headers.
+        class and represents reformat flow steering action that allows
+        adding/removing packet headers.
         :param context: Context object
         :param data: Encap headers (if needed)
         :param reformat_type: L2 or L3 encap or decap
@@ -218,7 +225,7 @@ cdef class Mlx5FlowActionAttr(PyverbsObject):
 
 cdef class Mlx5Flow(Flow):
     def __init__(self, Mlx5FlowMatcher matcher,
-                 Mlx5FlowMatchParameters match_value, action_attrs=[],
+                 Mlx5FlowMatchParameters match_value, action_attrs=None,
                  num_actions=0):
         """
         Initialize a Mlx5Flow object derived form Flow class.
@@ -231,6 +238,7 @@ cdef class Mlx5Flow(Flow):
         cdef void *attr_addr
 
         super(Flow, self).__init__()
+        action_attrs = [] if action_attrs is None else action_attrs
         if len(action_attrs) != num_actions:
             self.logger.warn('num_actions is different from actions array length.')
         total_size = num_actions * sizeof(dv.mlx5dv_flow_action_attr)

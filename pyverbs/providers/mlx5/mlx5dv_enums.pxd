@@ -23,6 +23,7 @@ cdef extern from 'infiniband/mlx5dv.h':
         MLX5_OPCODE_CONFIG_CMD
         MLX5_OPCODE_UMR
         MLX5_OPCODE_TAG_MATCHING
+        MLX5_OPCODE_MMO
 
     cpdef enum:
         MLX5_WQE_CTRL_CQ_UPDATE
@@ -44,6 +45,10 @@ cdef extern from 'infiniband/mlx5dv.h':
         MLX5DV_CONTEXT_MASK_DC_ODP_CAPS         = 1 << 7
         MLX5DV_CONTEXT_MASK_NUM_LAG_PORTS       = 1 << 9
         MLX5DV_CONTEXT_MASK_SIGNATURE_OFFLOAD   = 1 << 10
+        MLX5DV_CONTEXT_MASK_DCI_STREAMS         = 1 << 11
+        MLX5DV_CONTEXT_MASK_WR_MEMCPY_LENGTH    = 1 << 12
+        MLX5DV_CONTEXT_MASK_CRYPTO_OFFLOAD      = 1 << 13
+        MLX5DV_CONTEXT_MASK_MAX_DC_RD_ATOM      = 1 << 14
 
     cpdef enum mlx5dv_context_flags:
         MLX5DV_CONTEXT_FLAGS_CQE_V1                     = 1 << 0
@@ -86,6 +91,7 @@ cdef extern from 'infiniband/mlx5dv.h':
         MLX5DV_QP_INIT_ATTR_MASK_QP_CREATE_FLAGS    = 1 << 0
         MLX5DV_QP_INIT_ATTR_MASK_DC                 = 1 << 1
         MLX5DV_QP_INIT_ATTR_MASK_SEND_OPS_FLAGS     = 1 << 2
+        MLX5DV_QP_INIT_ATTR_MASK_DCI_STREAMS        = 1 << 3
 
     cpdef enum mlx5dv_qp_create_flags:
         MLX5DV_QP_CREATE_TUNNEL_OFFLOADS            = 1 << 0
@@ -103,6 +109,8 @@ cdef extern from 'infiniband/mlx5dv.h':
     cpdef enum mlx5dv_mkey_init_attr_flags:
         MLX5DV_MKEY_INIT_ATTR_FLAGS_INDIRECT
         MLX5DV_MKEY_INIT_ATTR_FLAGS_BLOCK_SIGNATURE
+        MLX5DV_MKEY_INIT_ATTR_FLAGS_CRYPTO
+        MLX5DV_MKEY_INIT_ATTR_FLAGS_REMOTE_INVALIDATE
 
     cpdef enum mlx5dv_mkey_err_type:
         MLX5DV_MKEY_NO_ERR
@@ -151,6 +159,7 @@ cdef extern from 'infiniband/mlx5dv.h':
         MLX5DV_QP_EX_WITH_MR_LIST           = 1 << 1
         MLX5DV_QP_EX_WITH_MKEY_CONFIGURE    = 1 << 2
         MLX5DV_QP_EX_WITH_RAW_WQE           = 1 << 3
+        MLX5DV_QP_EX_WITH_MEMCPY            = 1 << 4
 
     cpdef enum mlx5dv_cq_init_attr_mask:
         MLX5DV_CQ_INIT_ATTR_MASK_COMPRESSED_CQE = 1 << 0
@@ -176,19 +185,124 @@ cdef extern from 'infiniband/mlx5dv.h':
         MLX5DV_DR_DOMAIN_TYPE_NIC_TX
         MLX5DV_DR_DOMAIN_TYPE_FDB
 
-    cpdef unsigned long long MLX5DV_RES_TYPE_QP
-    cpdef unsigned long long MLX5DV_RES_TYPE_RWQ
-    cpdef unsigned long long MLX5DV_RES_TYPE_DBR
-    cpdef unsigned long long MLX5DV_RES_TYPE_SRQ
-    cpdef unsigned long long MLX5DV_PP_ALLOC_FLAGS_DEDICATED_INDEX
-    cpdef unsigned long long MLX5DV_UAR_ALLOC_TYPE_BF
-    cpdef unsigned long long MLX5DV_UAR_ALLOC_TYPE_NC
-    cpdef unsigned long long MLX5DV_QUERY_PORT_VPORT
-    cpdef unsigned long long MLX5DV_QUERY_PORT_VPORT_VHCA_ID
-    cpdef unsigned long long MLX5DV_QUERY_PORT_VPORT_STEERING_ICM_RX
-    cpdef unsigned long long MLX5DV_QUERY_PORT_VPORT_STEERING_ICM_TX
-    cpdef unsigned long long MLX5DV_QUERY_PORT_VPORT_REG_C0
-    cpdef unsigned long long MLX5DV_QUERY_PORT_ESW_OWNER_VHCA_ID
+    cpdef enum mlx5dv_qp_comp_mask:
+        MLX5DV_QP_MASK_UAR_MMAP_OFFSET
+        MLX5DV_QP_MASK_RAW_QP_HANDLES
+        MLX5DV_QP_MASK_RAW_QP_TIR_ADDR
+
+    cpdef enum mlx5dv_srq_comp_mask:
+        MLX5DV_SRQ_MASK_SRQN
+
+    cpdef enum mlx5dv_obj_type:
+        MLX5DV_OBJ_QP
+        MLX5DV_OBJ_CQ
+        MLX5DV_OBJ_SRQ
+        MLX5DV_OBJ_RWQ
+        MLX5DV_OBJ_DM
+        MLX5DV_OBJ_AH
+        MLX5DV_OBJ_PD
+
+    cpdef enum:
+        MLX5_RCV_DBR
+        MLX5_SND_DBR
+
+    cpdef enum:
+        MLX5_CQE_OWNER_MASK
+        MLX5_CQE_REQ
+        MLX5_CQE_RESP_WR_IMM
+        MLX5_CQE_RESP_SEND
+        MLX5_CQE_RESP_SEND_IMM
+        MLX5_CQE_RESP_SEND_INV
+        MLX5_CQE_RESIZE_CQ
+        MLX5_CQE_NO_PACKET
+        MLX5_CQE_SIG_ERR
+        MLX5_CQE_REQ_ERR
+        MLX5_CQE_RESP_ERR
+        MLX5_CQE_INVALID
+
+    cpdef enum:
+        MLX5_SEND_WQE_BB
+        MLX5_SEND_WQE_SHIFT
+
+    cpdef enum mlx5dv_vfio_context_attr_flags:
+        MLX5DV_VFIO_CTX_FLAGS_INIT_LINK_DOWN
+
+    cpdef enum mlx5dv_wc_opcode:
+        MLX5DV_WC_UMR
+        MLX5DV_WC_RAW_WQE
+        MLX5DV_WC_MEMCPY
+
+    cpdef enum mlx5dv_crypto_standard:
+        MLX5DV_CRYPTO_STANDARD_AES_XTS
+
+    cpdef enum mlx5dv_signature_crypto_order:
+        MLX5DV_SIGNATURE_CRYPTO_ORDER_SIGNATURE_AFTER_CRYPTO_ON_TX
+        MLX5DV_SIGNATURE_CRYPTO_ORDER_SIGNATURE_BEFORE_CRYPTO_ON_TX
+
+    cpdef enum mlx5dv_crypto_login_state:
+        MLX5DV_CRYPTO_LOGIN_STATE_VALID
+        MLX5DV_CRYPTO_LOGIN_STATE_NO_LOGIN
+        MLX5DV_CRYPTO_LOGIN_STATE_INVALID
+
+    cpdef enum mlx5dv_crypto_key_size:
+        MLX5DV_CRYPTO_KEY_SIZE_128
+        MLX5DV_CRYPTO_KEY_SIZE_256
+
+    cpdef enum mlx5dv_crypto_key_purpose:
+        MLX5DV_CRYPTO_KEY_PURPOSE_AES_XTS
+
+    cpdef enum mlx5dv_dek_state:
+        MLX5DV_DEK_STATE_READY
+        MLX5DV_DEK_STATE_ERROR
+
+    cpdef enum mlx5dv_dek_init_attr_mask:
+        MLX5DV_DEK_INIT_ATTR_CRYPTO_LOGIN
+
+    cpdef enum mlx5dv_crypto_engines_caps:
+        MLX5DV_CRYPTO_ENGINES_CAP_AES_XTS
+        MLX5DV_CRYPTO_ENGINES_CAP_AES_XTS_SINGLE_BLOCK
+        MLX5DV_CRYPTO_ENGINES_CAP_AES_XTS_MULTI_BLOCK
+
+    cpdef enum mlx5dv_crypto_wrapped_import_method_caps:
+        MLX5DV_CRYPTO_WRAPPED_IMPORT_METHOD_CAP_AES_XTS
+
+    cpdef enum mlx5dv_crypto_caps_flags:
+        MLX5DV_CRYPTO_CAPS_CRYPTO
+        MLX5DV_CRYPTO_CAPS_WRAPPED_CRYPTO_OPERATIONAL
+        MLX5DV_CRYPTO_CAPS_WRAPPED_CRYPTO_GOING_TO_COMMISSIONING
+
+    cpdef enum mlx5dv_dr_action_flags:
+        MLX5DV_DR_ACTION_FLAGS_ROOT_LEVEL
+
+    cpdef enum mlx5dv_dr_domain_sync_flags:
+        MLX5DV_DR_DOMAIN_SYNC_FLAGS_SW
+        MLX5DV_DR_DOMAIN_SYNC_FLAGS_HW
+        MLX5DV_DR_DOMAIN_SYNC_FLAGS_MEM
+
+    cpdef enum mlx5dv_dr_matcher_layout_flags:
+       MLX5DV_DR_MATCHER_LAYOUT_RESIZABLE
+       MLX5DV_DR_MATCHER_LAYOUT_NUM_RULE
+
+    cpdef enum mlx5dv_dr_action_dest_type:
+        MLX5DV_DR_ACTION_DEST
+        MLX5DV_DR_ACTION_DEST_REFORMAT
+
+    cpdef enum:
+        MLX5DV_UMEM_MASK_DMABUF
+
+    cdef unsigned long long MLX5DV_RES_TYPE_QP
+    cdef unsigned long long MLX5DV_RES_TYPE_RWQ
+    cdef unsigned long long MLX5DV_RES_TYPE_DBR
+    cdef unsigned long long MLX5DV_RES_TYPE_SRQ
+    cdef unsigned long long MLX5DV_PP_ALLOC_FLAGS_DEDICATED_INDEX
+    cdef unsigned long long MLX5DV_UAR_ALLOC_TYPE_BF
+    cdef unsigned long long MLX5DV_UAR_ALLOC_TYPE_NC
+    cdef unsigned long long MLX5DV_QUERY_PORT_VPORT
+    cdef unsigned long long MLX5DV_QUERY_PORT_VPORT_VHCA_ID
+    cdef unsigned long long MLX5DV_QUERY_PORT_VPORT_STEERING_ICM_RX
+    cdef unsigned long long MLX5DV_QUERY_PORT_VPORT_STEERING_ICM_TX
+    cdef unsigned long long MLX5DV_QUERY_PORT_VPORT_REG_C0
+    cdef unsigned long long MLX5DV_QUERY_PORT_ESW_OWNER_VHCA_ID
 
 
 _MLX5DV_RES_TYPE_QP = MLX5DV_RES_TYPE_QP
@@ -211,11 +325,11 @@ cdef extern from 'infiniband/mlx5_user_ioctl_verbs.h':
         pass
 
 cdef extern from 'infiniband/mlx5_api.h':
-    cpdef int MLX5DV_FLOW_TABLE_TYPE_RDMA_RX
-    cpdef int MLX5DV_FLOW_TABLE_TYPE_RDMA_TX
-    cpdef int MLX5DV_FLOW_TABLE_TYPE_NIC_RX
-    cpdef int MLX5DV_FLOW_TABLE_TYPE_NIC_TX
-    cpdef int MLX5DV_FLOW_TABLE_TYPE_FDB
+    cdef int MLX5DV_FLOW_TABLE_TYPE_RDMA_RX
+    cdef int MLX5DV_FLOW_TABLE_TYPE_RDMA_TX
+    cdef int MLX5DV_FLOW_TABLE_TYPE_NIC_RX
+    cdef int MLX5DV_FLOW_TABLE_TYPE_NIC_TX
+    cdef int MLX5DV_FLOW_TABLE_TYPE_FDB
 
     cdef int MLX5DV_FLOW_ACTION_PACKET_REFORMAT_TYPE_L2_TUNNEL_TO_L2
     cdef int MLX5DV_FLOW_ACTION_PACKET_REFORMAT_TYPE_L2_TO_L2_TUNNEL

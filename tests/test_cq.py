@@ -12,7 +12,9 @@ from tests.base import PyverbsAPITestCase, RDMATestCase, UDResources
 from pyverbs.pyverbs_error import PyverbsRDMAError
 from pyverbs.base import PyverbsRDMAErrno
 from pyverbs.cq import CompChannel, CQ
+import tests.irdma_base as irdma
 from pyverbs.qp import QPCap
+import pyverbs.device as d
 import tests.utils as u
 
 
@@ -58,9 +60,13 @@ class CQAPITest(PyverbsAPITestCase):
 
     def test_create_cq_with_comp_channel(self):
         for cq_size in [1, self.attr.max_cqe/2, self.attr.max_cqe]:
-            cc = CompChannel(self.ctx)
-            CQ(self.ctx, cq_size, None, cc, 0)
-            cc.close()
+            try:
+                cc = CompChannel(self.ctx)
+                CQ(self.ctx, cq_size, None, cc, 0)
+                cc.close()
+            except PyverbsRDMAError as ex:
+                if ex.error_code == errno.EOPNOTSUPP:
+                    raise unittest.SkipTest(f'CQ with completion channel is not supported')
 
     def test_create_cq_bad_flow(self):
         """
@@ -84,15 +90,6 @@ class CQTest(RDMATestCase):
         self.iters = 10
         self.server = None
         self.client = None
-
-    def create_players(self, resource, **resource_arg):
-        self.client = resource(**self.dev_info, **resource_arg)
-        self.server = resource(**self.dev_info, **resource_arg)
-        self.client.pre_run(self.server.psns, self.server.qps_num)
-        self.server.pre_run(self.client.psns, self.client.qps_num)
-        self.traffic_args = {'client': self.client, 'server': self.server,
-                             'iters': self.iters, 'gid_idx': self.gid_index,
-                             'port': self.ib_port}
 
     def test_resize_cq(self):
         """
@@ -120,6 +117,7 @@ class CQTest(RDMATestCase):
                         f'The actual CQ size ({self.client.cq.cqe}) is less '
                         'than guaranteed ({new_cq_size})')
 
+        irdma.skip_if_irdma_dev(d.Context(name=self.dev_name))
         # Fill the CQ entries except one for avoid cq_overrun warnings.
         send_wr, _ = u.get_send_elements(self.client, False)
         ah_client = u.get_global_ah(self.client, self.gid_index, self.ib_port)

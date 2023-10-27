@@ -17,6 +17,7 @@ from pyverbs.srq cimport SRQ
 from pyverbs.addr cimport AH
 from pyverbs.cq cimport CQEX
 from pyverbs.qp cimport QP
+from pyverbs.wq cimport WQ
 
 
 cdef class PD(PyverbsCM):
@@ -55,7 +56,8 @@ cdef class PD(PyverbsCM):
             raise PyverbsUserError('Cannot create PD from {type}'
                                    .format(type=type(creator)))
         self.ctx.add_ref(self)
-        self.logger.debug('Created PD')
+        if self.logger:
+            self.logger.debug('Created PD')
         self.srqs = weakref.WeakSet()
         self.mrs = weakref.WeakSet()
         self.mws = weakref.WeakSet()
@@ -63,6 +65,8 @@ cdef class PD(PyverbsCM):
         self.qps = weakref.WeakSet()
         self.parent_domains = weakref.WeakSet()
         self.mkeys = weakref.WeakSet()
+        self.deks = weakref.WeakSet()
+        self.wqs = weakref.WeakSet()
 
     def advise_mr(self, advise, uint32_t flags, sg_list not None):
         """
@@ -103,9 +107,10 @@ cdef class PD(PyverbsCM):
         :return: None
         """
         if self.pd != NULL:
-            self.logger.debug('Closing PD')
-            close_weakrefs([self.mkeys, self.parent_domains, self.qps, self.ahs,
-                            self.mws, self.mrs, self.srqs])
+            if self.logger:
+                self.logger.debug('Closing PD')
+            close_weakrefs([self.deks, self.mkeys, self.parent_domains, self.qps,
+                            self.wqs, self.ahs, self.mws, self.mrs, self.srqs])
             if not self._is_imported:
                 rc = v.ibv_dealloc_pd(self.pd)
                 if rc != 0:
@@ -126,6 +131,8 @@ cdef class PD(PyverbsCM):
             self.srqs.add(obj)
         elif isinstance(obj, ParentDomain):
             self.parent_domains.add(obj)
+        elif isinstance(obj, WQ):
+            self.wqs.add(obj)
         else:
             raise PyverbsError('Unrecognized object type')
 
@@ -138,6 +145,10 @@ cdef class PD(PyverbsCM):
     @property
     def handle(self):
         return self.pd.handle
+
+    @property
+    def pd(self):
+        return <object>self.pd
 
 
 cdef void *pd_alloc(v.ibv_pd *pd, void *pd_context, size_t size,
@@ -257,7 +268,8 @@ cdef class ParentDomain(PD):
 
     cpdef close(self):
         if self.pd != NULL:
-            self.logger.debug('Closing ParentDomain')
+            if self.logger:
+                self.logger.debug('Closing ParentDomain')
             close_weakrefs([self.cqs])
             super(ParentDomain, self).close()
 
