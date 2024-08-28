@@ -1,8 +1,5 @@
 .\" Man page generated from reStructuredText.
 .
-.TH IBCCQUERY 8 "2012-05-31" "" "OpenIB Diagnostics"
-.SH NAME
-IBCCQUERY \- query congestion control settings/info
 .
 .nr rst2man-indent-level 0
 .
@@ -30,6 +27,9 @@ level margin: \\n[rst2man-indent\\n[rst2man-indent-level]]
 .\" new: \\n[rst2man-indent\\n[rst2man-indent-level]]
 .in \\n[rst2man-indent\\n[rst2man-indent-level]]u
 ..
+.TH "IBCCQUERY" 8 "2012-05-31" "" "OpenIB Diagnostics"
+.SH NAME
+IBCCQUERY \- query congestion control settings/info
 .SH SYNOPSIS
 .sp
 ibccquery [common_options] [\-c cckey] <op> <lid|guid> [port]
@@ -58,7 +58,7 @@ Specify a congestion control (CC) key.  If none is specified, a key of 0 is used
 .
 .INDENT 0.0
 .TP
-.B \-d
+.B  \-d
 raise the IB debugging level.
 May be used several times (\-ddd or \-d \-d \-d).
 .UNINDENT
@@ -66,7 +66,7 @@ May be used several times (\-ddd or \-d \-d \-d).
 .
 .INDENT 0.0
 .TP
-.B \-e
+.B  \-e
 show send and receive errors (timeouts and others)
 .UNINDENT
 .\" Define the common option -h

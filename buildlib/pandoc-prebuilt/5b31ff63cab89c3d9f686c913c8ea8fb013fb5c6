@@ -1,8 +1,5 @@
 .\" Man page generated from reStructuredText.
 .
-.TH IBSTAT 8 "2017-08-21" "" "Open IB Diagnostics"
-.SH NAME
-ibstat \- query basic status of InfiniBand device(s)
 .
 .nr rst2man-indent-level 0
 .
@@ -30,6 +27,9 @@ level margin: \\n[rst2man-indent\\n[rst2man-indent-level]]
 .\" new: \\n[rst2man-indent\\n[rst2man-indent-level]]
 .in \\n[rst2man-indent\\n[rst2man-indent-level]]u
 ..
+.TH "IBSTAT" 8 "2017-08-21" "" "Open IB Diagnostics"
+.SH NAME
+ibstat \- query basic status of InfiniBand device(s)
 .SH SYNOPSIS
 .sp
 ibstat [options] <ca_name> [portnum]
@@ -65,7 +65,7 @@ port number of InfiniBand device
 .
 .INDENT 0.0
 .TP
-.B \-d
+.B  \-d
 raise the IB debugging level.
 May be used several times (\-ddd or \-d \-d \-d).
 .UNINDENT

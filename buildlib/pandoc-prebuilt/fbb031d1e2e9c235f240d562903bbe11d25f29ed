@@ -1,8 +1,5 @@
 .\" Man page generated from reStructuredText.
 .
-.TH IBLINKINFO 8 "2018-07-09" "" "OpenIB Diagnostics"
-.SH NAME
-IBLINKINFO \- report link info for all links in the fabric
 .
 .nr rst2man-indent-level 0
 .
@@ -30,6 +27,9 @@ level margin: \\n[rst2man-indent\\n[rst2man-indent-level]]
 .\" new: \\n[rst2man-indent\\n[rst2man-indent-level]]
 .in \\n[rst2man-indent\\n[rst2man-indent-level]]u
 ..
+.TH "IBLINKINFO" 8 "2018-07-09" "" "OpenIB Diagnostics"
+.SH NAME
+IBLINKINFO \- report link info for all links in the fabric
 .SH SYNOPSIS
 .sp
 iblinkinfo <options>
@@ -221,7 +221,7 @@ is specified then a value will be prompted for.
 .
 .INDENT 0.0
 .TP
-.B \-e
+.B  \-e
 show send and receive errors (timeouts and others)
 .UNINDENT
 .\" Define the common option -h

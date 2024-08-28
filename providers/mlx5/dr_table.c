@@ -79,7 +79,7 @@ static int dr_table_init_nic(struct mlx5dv_dr_domain *dmn,
 	info.type = CONNECT_MISS;
 	info.miss_icm_addr = nic_dmn->default_icm_addr;
 	ret = dr_ste_htbl_init_and_postsend(dmn, nic_dmn, nic_tbl->s_anchor,
-					    &info, true);
+					    &info, true, 0);
 	if (ret)
 		goto free_s_anchor;
 
@@ -151,10 +151,12 @@ static int dr_table_create_devx_tbl(struct mlx5dv_dr_table *tbl)
 	ft_attr.sw_owner = true;
 
 	if (tbl->rx.s_anchor)
-		ft_attr.icm_addr_rx = tbl->rx.s_anchor->chunk->icm_addr;
+		ft_attr.icm_addr_rx =
+			dr_icm_pool_get_chunk_icm_addr(tbl->rx.s_anchor->chunk);
 
 	if (tbl->tx.s_anchor)
-		ft_attr.icm_addr_tx = tbl->tx.s_anchor->chunk->icm_addr;
+		ft_attr.icm_addr_tx =
+			dr_icm_pool_get_chunk_icm_addr(tbl->tx.s_anchor->chunk);
 
 	tbl->devx_obj = dr_devx_create_flow_table(tbl->dmn->ctx, &ft_attr);
 	if (!tbl->devx_obj)

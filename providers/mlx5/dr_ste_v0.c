@@ -156,6 +156,9 @@ static const struct dr_ste_action_modify_field dr_ste_v0_action_modify_field_arr
 	[MLX5_ACTION_IN_FIELD_OUT_IP_DSCP] = {
 		.hw_field = DR_STE_V0_ACTION_MDFY_FLD_L3_1, .start = 0, .end = 5,
 	},
+	[MLX5_ACTION_IN_FIELD_OUT_IP_ECN] = {
+		.hw_field = DR_STE_V0_ACTION_MDFY_FLD_L3_1, .start = 6, .end = 7,
+	},
 	[MLX5_ACTION_IN_FIELD_OUT_TCP_FLAGS] = {
 		.hw_field = DR_STE_V0_ACTION_MDFY_FLD_L4_0, .start = 48, .end = 56,
 		.l4_type = DR_STE_ACTION_MDFY_TYPE_L4_TCP,
@@ -267,6 +270,11 @@ static void dr_ste_v0_set_entry_type(uint8_t *hw_ste_p, uint8_t entry_type)
 static uint8_t dr_ste_v0_get_entry_type(uint8_t *hw_ste_p)
 {
 	return DR_STE_GET(general, hw_ste_p, entry_type);
+}
+
+static void dr_ste_v0_set_hit_gvmi(uint8_t *hw_ste_p, uint16_t gvmi)
+{
+	DR_STE_SET(general, hw_ste_p, next_table_base_63_48, gvmi);
 }
 
 static void dr_ste_v0_set_miss_addr(uint8_t *hw_ste_p, uint64_t miss_addr)
@@ -389,6 +397,7 @@ static void dr_ste_v0_set_rx_decap(uint8_t *hw_ste_p)
 {
 	DR_STE_SET(rx_steering_mult, hw_ste_p, tunneling_action,
 		   DR_STE_TUNL_ACTION_DECAP);
+	DR_STE_SET(rx_steering_mult, hw_ste_p, fail_on_error, 1);
 }
 
 static void dr_ste_v0_set_go_back_bit(uint8_t *hw_ste_p)
@@ -421,6 +430,7 @@ static void dr_ste_v0_set_rx_decap_l3(uint8_t *hw_ste_p, bool vlan)
 	DR_STE_SET(rx_steering_mult, hw_ste_p, tunneling_action,
 		   DR_STE_TUNL_ACTION_L3_DECAP);
 	DR_STE_SET(modify_packet, hw_ste_p, action_description, vlan ? 1 : 0);
+	DR_STE_SET(rx_steering_mult, hw_ste_p, fail_on_error, 1);
 }
 
 static void dr_ste_v0_set_rewrite_actions(uint8_t *hw_ste_p,
@@ -444,6 +454,7 @@ static inline void dr_ste_v0_arr_init_next(uint8_t **last_ste,
 }
 
 static void dr_ste_v0_set_actions_tx(uint8_t *action_type_set,
+				     uint32_t actions_caps,
 				     uint8_t *last_ste,
 				     struct dr_ste_actions_attr *attr,
 				     uint32_t *added_stes)
@@ -465,7 +476,7 @@ static void dr_ste_v0_set_actions_tx(uint8_t *action_type_set,
 	if (action_type_set[DR_ACTION_TYP_PUSH_VLAN]) {
 		int i;
 
-		for (i = 0; i < attr->vlans.count; i++) {
+		for (i = 0; i < attr->vlans.count_push; i++) {
 			if (i || action_type_set[DR_ACTION_TYP_MODIFY_HDR])
 				dr_ste_v0_arr_init_next(&last_ste,
 							added_stes,
@@ -507,10 +518,12 @@ static void dr_ste_v0_set_actions_tx(uint8_t *action_type_set,
 	if (action_type_set[DR_ACTION_TYP_CTR])
 		dr_ste_v0_set_counter_id(last_ste, attr->ctr_id);
 
+	dr_ste_v0_set_hit_gvmi(last_ste, attr->hit_gvmi);
 	dr_ste_v0_set_hit_addr(last_ste, attr->final_icm_addr, 1);
 }
 
 static void dr_ste_v0_set_actions_rx(uint8_t *action_type_set,
+				     uint32_t actions_caps,
 				     uint8_t *last_ste,
 				     struct dr_ste_actions_attr *attr,
 				     uint32_t *added_stes)
@@ -532,7 +545,7 @@ static void dr_ste_v0_set_actions_rx(uint8_t *action_type_set,
 	if (action_type_set[DR_ACTION_TYP_POP_VLAN]) {
 		int i;
 
-		for (i = 0; i < attr->vlans.count; i++) {
+		for (i = 0; i < attr->vlans.count_pop; i++) {
 			if (i ||
 			    action_type_set[DR_ACTION_TYP_TNL_L2_TO_L2] ||
 			    action_type_set[DR_ACTION_TYP_TNL_L3_TO_L2])
@@ -569,6 +582,7 @@ static void dr_ste_v0_set_actions_rx(uint8_t *action_type_set,
 		dr_ste_v0_set_rx_flow_tag(last_ste, attr->flow_tag);
 	}
 
+	dr_ste_v0_set_hit_gvmi(last_ste, attr->hit_gvmi);
 	dr_ste_v0_set_hit_addr(last_ste, attr->final_icm_addr, 1);
 }
 
@@ -709,14 +723,15 @@ dr_ste_v0_set_action_decap_l3_list(void *data, uint32_t data_sz,
 }
 
 static const struct dr_ste_action_modify_field
-*dr_ste_v0_get_action_hw_field(uint16_t sw_field, struct dr_devx_caps *caps)
+*dr_ste_v0_get_action_hw_field(struct dr_ste_ctx *ste_ctx,
+			       uint16_t sw_field, struct dr_devx_caps *caps)
 {
 	const struct dr_ste_action_modify_field *hw_field;
 
-	if (sw_field >= ARRAY_SIZE(dr_ste_v0_action_modify_field_arr))
+	if (sw_field >= ste_ctx->action_modify_field_arr_size)
 		goto not_found;
 
-	hw_field = &dr_ste_v0_action_modify_field_arr[sw_field];
+	hw_field = &ste_ctx->action_modify_field_arr[sw_field];
 	if (!hw_field->end && !hw_field->start)
 		goto not_found;
 
@@ -749,11 +764,9 @@ static void dr_ste_v0_build_eth_l2_src_dst_bit_mask(struct dr_match_param *value
 	DR_STE_SET_TAG(eth_l2_src_dst, bit_mask, first_priority, mask, first_prio);
 	DR_STE_SET_ONES(eth_l2_src_dst, bit_mask, l3_type, mask, ip_version);
 
-	if (mask->cvlan_tag) {
+	if (mask->cvlan_tag || mask->svlan_tag) {
 		DR_STE_SET(eth_l2_src_dst, bit_mask, first_vlan_qualifier, -1);
 		mask->cvlan_tag = 0;
-	} else if (mask->svlan_tag) {
-		DR_STE_SET(eth_l2_src_dst, bit_mask, first_vlan_qualifier, -1);
 		mask->svlan_tag = 0;
 	}
 }
@@ -1685,9 +1698,13 @@ static void dr_ste_v0_build_register_1_init(struct dr_ste_build *sb,
 }
 
 static void dr_ste_v0_build_src_gvmi_qpn_bit_mask(struct dr_match_param *value,
-						  uint8_t *bit_mask)
+						  struct dr_ste_build *sb)
 {
 	struct dr_match_misc *misc_mask = &value->misc;
+	uint8_t *bit_mask = sb->bit_mask;
+
+	if (sb->rx && misc_mask->source_port)
+		DR_STE_SET(src_gvmi_qp, bit_mask, functional_lb, 1);
 
 	DR_STE_SET_ONES(src_gvmi_qp, bit_mask, source_gvmi, misc_mask, source_port);
 	DR_STE_SET_ONES(src_gvmi_qp, bit_mask, source_qp, misc_mask, source_sqn);
@@ -1706,12 +1723,19 @@ static int dr_ste_v0_build_src_gvmi_qpn_tag(struct dr_match_param *value,
 
 	source_gvmi_set = DR_STE_GET(src_gvmi_qp, bit_mask, source_gvmi);
 	if (source_gvmi_set) {
-		vport_cap = dr_get_vport_cap(sb->caps, misc->source_port);
+		vport_cap = dr_vports_table_get_vport_cap(sb->caps,
+							  misc->source_port);
 		if (!vport_cap)
 			return errno;
 
-		if (vport_cap->gvmi)
-			DR_STE_SET(src_gvmi_qp, tag, source_gvmi, vport_cap->gvmi);
+		if (vport_cap->vport_gvmi)
+			DR_STE_SET(src_gvmi_qp, tag, source_gvmi, vport_cap->vport_gvmi);
+
+		/* Make sure that this packet is not coming from the wire since
+		 * wire GVMI is set to 0 and can be aliased with another port
+		 */
+		if (sb->rx && misc->source_port != WIRE_PORT)
+			DR_STE_SET(src_gvmi_qp, tag, functional_lb, 1);
 
 		misc->source_port = 0;
 	}
@@ -1722,22 +1746,33 @@ static int dr_ste_v0_build_src_gvmi_qpn_tag(struct dr_match_param *value,
 static void dr_ste_v0_build_src_gvmi_qpn_init(struct dr_ste_build *sb,
 					      struct dr_match_param *mask)
 {
-	dr_ste_v0_build_src_gvmi_qpn_bit_mask(mask, sb->bit_mask);
+	dr_ste_v0_build_src_gvmi_qpn_bit_mask(mask, sb);
 
 	sb->lu_type = DR_STE_V0_LU_TYPE_SRC_GVMI_AND_QP;
 	sb->byte_mask = dr_ste_conv_bit_to_byte_mask(sb->bit_mask);
 	sb->ste_build_tag_func = &dr_ste_v0_build_src_gvmi_qpn_tag;
 }
 
-static void dr_ste_set_flex_parser(uint32_t *misc4_field_id,
+static void dr_ste_set_flex_parser(uint16_t lu_type,
+				   uint32_t *misc4_field_id,
 				   uint32_t *misc4_field_value,
 				   bool *parser_is_used,
 				   uint8_t *tag)
 {
 	uint32_t id = *misc4_field_id;
 	uint8_t *parser_ptr;
+	bool skip_parser;
 
-	if (parser_is_used[id])
+	/* Since this is a shared function to set flex parsers,
+	 * we need to skip it if lookup type and parser ID doesn't match
+	 */
+	skip_parser = id <= DR_STE_MAX_FLEX_0_ID ?
+		      lu_type != DR_STE_V0_LU_TYPE_FLEX_PARSER_0 :
+		      lu_type != DR_STE_V0_LU_TYPE_FLEX_PARSER_1;
+
+	skip_parser = skip_parser || (id >= NUM_OF_FLEX_PARSERS);
+
+	if (skip_parser || parser_is_used[id])
 		return;
 
 	parser_is_used[id] = true;
@@ -1755,22 +1790,45 @@ static int dr_ste_v0_build_flex_parser_tag(struct dr_match_param *value,
 	struct dr_match_misc4 *misc_4_mask = &value->misc4;
 	bool parser_is_used[NUM_OF_FLEX_PARSERS] = {};
 
-	dr_ste_set_flex_parser(&misc_4_mask->prog_sample_field_id_0,
+	dr_ste_set_flex_parser(sb->lu_type,
+			       &misc_4_mask->prog_sample_field_id_0,
 			       &misc_4_mask->prog_sample_field_value_0,
 			       parser_is_used, tag);
 
-	dr_ste_set_flex_parser(&misc_4_mask->prog_sample_field_id_1,
+	dr_ste_set_flex_parser(sb->lu_type,
+			       &misc_4_mask->prog_sample_field_id_1,
 			       &misc_4_mask->prog_sample_field_value_1,
 			       parser_is_used, tag);
 
-	dr_ste_set_flex_parser(&misc_4_mask->prog_sample_field_id_2,
+	dr_ste_set_flex_parser(sb->lu_type,
+			       &misc_4_mask->prog_sample_field_id_2,
 			       &misc_4_mask->prog_sample_field_value_2,
 			       parser_is_used, tag);
 
-	dr_ste_set_flex_parser(&misc_4_mask->prog_sample_field_id_3,
+	dr_ste_set_flex_parser(sb->lu_type,
+			       &misc_4_mask->prog_sample_field_id_3,
 			       &misc_4_mask->prog_sample_field_value_3,
 			       parser_is_used, tag);
 
+	dr_ste_set_flex_parser(sb->lu_type,
+			       &misc_4_mask->prog_sample_field_id_4,
+			       &misc_4_mask->prog_sample_field_value_4,
+			       parser_is_used, tag);
+
+	dr_ste_set_flex_parser(sb->lu_type,
+			       &misc_4_mask->prog_sample_field_id_5,
+			       &misc_4_mask->prog_sample_field_value_5,
+			       parser_is_used, tag);
+
+	dr_ste_set_flex_parser(sb->lu_type,
+			       &misc_4_mask->prog_sample_field_id_6,
+			       &misc_4_mask->prog_sample_field_value_6,
+			       parser_is_used, tag);
+
+	dr_ste_set_flex_parser(sb->lu_type,
+			       &misc_4_mask->prog_sample_field_id_7,
+			       &misc_4_mask->prog_sample_field_value_7,
+			       parser_is_used, tag);
 	return 0;
 }
 
@@ -1842,7 +1900,7 @@ static struct dr_ste_ctx ste_ctx_v0 = {
 	.build_src_gvmi_qpn_init	= &dr_ste_v0_build_src_gvmi_qpn_init,
 	.build_flex_parser_0_init	= &dr_ste_v0_build_flex_parser_0_init,
 	.build_flex_parser_1_init	= &dr_ste_v0_build_flex_parser_1_init,
-	.build_tunnel_header_0_1	= &dr_ste_v0_build_tunnel_header_0_1_init,
+	.build_tunnel_header_init	= &dr_ste_v0_build_tunnel_header_0_1_init,
 	/* Getters and Setters */
 	.ste_init			= &dr_ste_v0_init,
 	.set_next_lu_type		= &dr_ste_v0_set_next_lu_type,
@@ -1854,8 +1912,11 @@ static struct dr_ste_ctx ste_ctx_v0 = {
 	.get_byte_mask			= &dr_ste_v0_get_byte_mask,
 	.set_ctrl_always_hit_htbl	= &dr_ste_v0_set_ctrl_always_hit_htbl,
 	.set_ctrl_always_miss		= &dr_ste_v0_set_ctrl_always_miss,
+	.set_hit_gvmi			= &dr_ste_v0_set_hit_gvmi,
 	/* Actions */
 	.actions_caps			= DR_STE_CTX_ACTION_CAP_NONE,
+	.action_modify_field_arr	= dr_ste_v0_action_modify_field_arr,
+	.action_modify_field_arr_size	= ARRAY_SIZE(dr_ste_v0_action_modify_field_arr),
 	.set_actions_rx			= &dr_ste_v0_set_actions_rx,
 	.set_actions_tx			= &dr_ste_v0_set_actions_tx,
 	.set_action_set			= &dr_ste_v0_set_action_set,

@@ -61,6 +61,13 @@ enum {
 	HDR_MPLS_OFFSET_TTL	= 0,
 };
 
+#define DR_DEVX_GET_CLEAR(typ, p, fld, clear) ({ \
+	uint32_t ___t = DEVX_GET(typ, p, fld); \
+	if (clear) \
+		DEVX_SET(typ, p, fld, 0); \
+	___t; \
+})
+
 /* Read from layout struct */
 #define DR_STE_GET(typ, p, fld) DEVX_GET(ste_##typ, p, fld)
 
@@ -166,6 +173,7 @@ struct dr_ste_ctx {
 	dr_ste_builder_void_init build_tnl_vxlan_gpe_init;
 	dr_ste_builder_void_init build_tnl_geneve_init;
 	dr_ste_builder_void_init build_tnl_geneve_tlv_opt_init;
+	dr_ste_builder_void_init build_tnl_geneve_tlv_opt_exist_init;
 	dr_ste_builder_void_init build_tnl_gtpu_init;
 	dr_ste_builder_void_init build_tnl_gtpu_flex_parser_0;
 	dr_ste_builder_void_init build_tnl_gtpu_flex_parser_1;
@@ -174,7 +182,8 @@ struct dr_ste_ctx {
 	dr_ste_builder_void_init build_src_gvmi_qpn_init;
 	dr_ste_builder_void_init build_flex_parser_0_init;
 	dr_ste_builder_void_init build_flex_parser_1_init;
-	dr_ste_builder_void_init build_tunnel_header_0_1;
+	dr_ste_builder_void_init build_tunnel_header_init;
+	dr_ste_builder_void_init build_ib_l4_init;
 	dr_ste_builder_void_init build_def0_init;
 	dr_ste_builder_void_init build_def2_init;
 	dr_ste_builder_void_init build_def6_init;
@@ -184,6 +193,13 @@ struct dr_ste_ctx {
 	dr_ste_builder_void_init build_def25_init;
 	dr_ste_builder_void_init build_def26_init;
 	dr_ste_builder_void_init build_def28_init;
+	dr_ste_builder_void_init build_def33_init;
+	int (*aso_other_domain_link)(struct mlx5dv_devx_obj *devx_obj,
+				     struct mlx5dv_dr_domain *peer_dmn,
+				     struct mlx5dv_dr_domain *dmn,
+				     uint32_t flags,
+				     uint8_t return_reg_c);
+	int (*aso_other_domain_unlink)(struct mlx5dv_devx_obj *devx_obj);
 
 	/* Getters and Setters */
 	void (*ste_init)(uint8_t *hw_ste_p, uint16_t lu_type,
@@ -201,14 +217,19 @@ struct dr_ste_ctx {
 	void (*set_ctrl_always_miss)(uint8_t *hw_ste,
 				     uint64_t miss_addr,
 				     uint16_t gvmi);
+	void (*set_hit_gvmi)(uint8_t *hw_ste, uint16_t gvmi);
 
 	/* Actions */
 	uint32_t actions_caps;
+	const struct dr_ste_action_modify_field *action_modify_field_arr;
+	size_t action_modify_field_arr_size;
 	void (*set_actions_rx)(uint8_t *action_type_set,
+			       uint32_t actions_caps,
 			       uint8_t *hw_ste_arr,
 			       struct dr_ste_actions_attr *attr,
 			       uint32_t *added_stes);
 	void (*set_actions_tx)(uint8_t *action_type_set,
+			       uint32_t actions_caps,
 			       uint8_t *hw_ste_arr,
 			       struct dr_ste_actions_attr *attr,
 			       uint32_t *added_stes);
@@ -229,11 +250,18 @@ struct dr_ste_ctx {
 				uint8_t src_hw_field,
 				uint8_t src_shifter);
 	const struct dr_ste_action_modify_field *
-		(*get_action_hw_field)(uint16_t sw_field,
+		(*get_action_hw_field)(struct dr_ste_ctx *ste_ctx,
+				       uint16_t sw_field,
 				       struct dr_devx_caps *caps);
 	int (*set_action_decap_l3_list)(void *data, uint32_t data_sz,
 					uint8_t *hw_action, uint32_t hw_action_sz,
 					uint16_t *used_hw_action_num);
+	void (*set_aso_ct_cross_dmn)(uint8_t *hw_ste, uint32_t object_id,
+				     uint32_t offset, uint8_t dest_reg_id,
+				     bool direction);
+	int (*alloc_modify_hdr_chunk)(struct mlx5dv_dr_action *action,
+				      uint32_t chunck_size);
+	void (*dealloc_modify_hdr_chunk)(struct mlx5dv_dr_action *action);
 
 	/* Send */
 	void (*prepare_for_postsend)(uint8_t *hw_ste_p, uint32_t ste_size);
@@ -241,5 +269,6 @@ struct dr_ste_ctx {
 
 struct dr_ste_ctx *dr_ste_get_ctx_v0(void);
 struct dr_ste_ctx *dr_ste_get_ctx_v1(void);
+struct dr_ste_ctx *dr_ste_get_ctx_v2(void);
 
 #endif
