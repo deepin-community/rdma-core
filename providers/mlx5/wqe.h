@@ -35,6 +35,8 @@
 
 #include <stdint.h>
 
+#include "mlx5dv.h"
+
 struct mlx5_sg_copy_ptr {
 	int	index;
 	int	offset;
@@ -132,6 +134,8 @@ enum {
 	MLX5_BSF_SIZE_BASIC = 0,
 	MLX5_BSF_SIZE_EXTENDED = 1,
 	MLX5_BSF_SIZE_WITH_INLINE = 2,
+	MLX5_BSF_SIZE_SIG_AND_CRYPTO = 3,
+	MLX5_BSF_TYPE_CRYPTO = 1,
 	MLX5_BSF_SIZE_SHIFT = 6,
 	MLX5_BSF_SBS_SHIFT = 4,
 
@@ -168,6 +172,21 @@ struct mlx5_bsf_inl {
 	__be16 dif_app_bitmask_check;
 };
 
+struct mlx5_crypto_bsf {
+	uint8_t bsf_size_type;
+	uint8_t enc_order;
+	uint8_t rsvd0;
+	uint8_t enc_standard;
+	__be32 raw_data_size;
+	uint8_t bs_pointer;
+	uint8_t rsvd1[7];
+	uint8_t xts_init_tweak[16];
+	__be32 rsvd_dek_ptr;
+	uint8_t rsvd2[4];
+	uint8_t keytag[8];
+	uint8_t rsvd3[16];
+};
+
 struct mlx5_bsf {
 	struct mlx5_bsf_basic {
 		uint8_t bsf_size_sbs;
@@ -200,6 +219,33 @@ struct mlx5_wqe_set_psv_seg {
 	__be16 syndrome;
 	uint8_t reserved[2];
 	__be64 transient_signature;
+};
+
+enum {
+	MLX5_OPC_MOD_MMO_DMA = 0x1,
+};
+
+struct mlx5_mmo_metadata_seg {
+	__be32 mmo_control_31_0;
+	__be32 local_key;
+	__be64 local_address;
+};
+
+struct mlx5_mmo_wqe {
+	struct mlx5_wqe_ctrl_seg ctrl;
+	struct mlx5_mmo_metadata_seg mmo_meta;
+	struct mlx5_wqe_data_seg src;
+	struct mlx5_wqe_data_seg dest;
+};
+
+struct mlx5_wqe_flow_update_ctrl_seg {
+	__be32 flow_idx_update;
+	__be32 dest_handle;
+	uint8_t reserved0[40];
+};
+
+struct mlx5_wqe_header_modify_argument_update_seg {
+	uint8_t argument_list[64];
 };
 
 #endif /* WQE_H */

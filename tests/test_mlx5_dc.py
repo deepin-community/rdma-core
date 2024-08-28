@@ -4,7 +4,10 @@
 import unittest
 import errno
 
-from tests.mlx5_base import Mlx5DcResources, Mlx5RDMATestCase
+import pyverbs.providers.mlx5.mlx5_enums as me
+from tests.mlx5_base import Mlx5DcResources, Mlx5RDMATestCase, Mlx5DcStreamsRes,\
+    DCI_TEST_GOOD_FLOW, DCI_TEST_BAD_FLOW_WITH_RESET,\
+    DCI_TEST_BAD_FLOW_WITHOUT_RESET
 from pyverbs.pyverbs_error import PyverbsRDMAError
 from pyverbs.providers.mlx5.mlx5dv import Mlx5QP
 import pyverbs.enums as e
@@ -33,41 +36,30 @@ class DCTest(Mlx5RDMATestCase):
         """
         Exchange the remote attributes between the server and the client.
         """
-        self.server.rkey = self.client.mr.rkey
-        self.server.raddr = self.client.mr.buf
-        self.client.rkey = self.server.mr.rkey
-        self.client.raddr = self.server.mr.buf
+        super().sync_remote_attr()
         self.client.remote_dct_num = self.server.dct_qp.qp_num
         self.server.remote_dct_num = self.client.dct_qp.qp_num
-
-    def create_players(self, resource, **resource_arg):
-        """
-        Init DC tests resources.
-        :param resource: The RDMA resources to use.
-        :param resource_arg: Dict of args that specify the resource specific
-        attributes.
-        :return: None
-        """
-        self.client = resource(**self.dev_info, **resource_arg)
-        self.server = resource(**self.dev_info, **resource_arg)
-        self.client.pre_run(self.server.psns, self.server.qps_num)
-        self.server.pre_run(self.client.psns, self.client.qps_num)
-        self.sync_remote_attr()
-        self.traffic_args = {'client': self.client, 'server': self.server,
-                             'iters': self.iters, 'gid_idx': self.gid_index,
-                             'port': self.ib_port}
 
     def test_dc_rdma_write(self):
         self.create_players(Mlx5DcResources, qp_count=2,
                             send_ops_flags=e.IBV_QP_EX_WITH_RDMA_WRITE)
         u.rdma_traffic(**self.traffic_args, new_send=True,
-                       send_op=e.IBV_QP_EX_WITH_RDMA_WRITE)
+                       send_op=e.IBV_WR_RDMA_WRITE)
 
     def test_dc_send(self):
         self.create_players(Mlx5DcResources, qp_count=2,
                             send_ops_flags=e.IBV_QP_EX_WITH_SEND)
         u.traffic(**self.traffic_args, new_send=True,
-                  send_op=e.IBV_QP_EX_WITH_SEND)
+                  send_op=e.IBV_WR_SEND)
+
+    def test_dc_atomic(self):
+        self.create_players(Mlx5DcResources, qp_count=2,
+                            send_ops_flags=e.IBV_QP_EX_WITH_ATOMIC_FETCH_AND_ADD)
+        client_max_log = self.client.ctx.query_mlx5_device().max_dc_rd_atom
+        server_max_log = self.server.ctx.query_mlx5_device().max_dc_rd_atom
+        u.atomic_traffic(**self.traffic_args, new_send=True,
+                         send_op=e.IBV_WR_ATOMIC_FETCH_AND_ADD,
+                         client_wr=client_max_log, server_wr=server_max_log)
 
     def test_dc_ah_to_qp_mapping(self):
         self.create_players(Mlx5DcResources, qp_count=2,
@@ -80,7 +72,7 @@ class DCTest(Mlx5RDMATestCase):
                 raise unittest.SkipTest('Mapping AH to QP is not supported')
             raise ex
         u.traffic(**self.traffic_args, new_send=True,
-                  send_op=e.IBV_QP_EX_WITH_SEND)
+                  send_op=e.IBV_WR_SEND)
 
     def check_odp_dc_support(self):
         """
@@ -97,4 +89,46 @@ class DCTest(Mlx5RDMATestCase):
         self.create_players(OdpDc, qp_count=2, send_ops_flags=send_ops_flag)
         self.check_odp_dc_support()
         u.traffic(**self.traffic_args, new_send=True,
-                  send_op=e.IBV_QP_EX_WITH_SEND)
+                  send_op=e.IBV_WR_SEND)
+
+    def test_dc_rdma_write_stream(self):
+        """
+        Check good flow of DCS.
+        Calculate stream_id for DCS test by setting same stream id
+        twice for WR and after increase it. Setting goes by loop
+        and after stream_id is more than number of concurrent
+        streams + 1 then stream_id returns to 1.
+        :raises SkipTest: In case DCI is not supported with HW
+        """
+        self.create_players(Mlx5DcStreamsRes, qp_count=2,
+                            send_ops_flags=e.IBV_QP_EX_WITH_RDMA_WRITE)
+        u.rdma_traffic(**self.traffic_args, new_send=True,
+                       send_op=e.IBV_WR_RDMA_WRITE)
+
+    def test_dc_send_stream_bad_flow(self):
+        """
+        Check bad flow of DCS with reset stream id.
+        Create error in dci stream by setting invalid PD so dci stream goes to error.
+        In the end, the test verifies that the number of errors is as expected.
+        :raises SkipTest: In case DCI is not supported with HW
+        """
+        self.create_players(Mlx5DcStreamsRes,
+                            qp_count=1, send_ops_flags=e.IBV_QP_EX_WITH_SEND)
+        self.client.set_bad_flow(DCI_TEST_BAD_FLOW_WITH_RESET)
+        self.client.traffic_with_bad_flow(**self.traffic_args)
+
+    def test_dc_send_stream_bad_flow_qp(self):
+        """
+        Check bad flow of DCS with reset qp.
+        Checked if resetting of wrong dci stream id produces an exception.
+        This bad flow creates enough errors without resetting the streams,
+        enforcing the QP to get into ERR state. Then the checking is stopped.
+        Also has feature that after QP goes in ERR state test will
+        reset QP to RTS state.
+        :raises SkipTest: In case DCI is not supported with HW
+        """
+        self.iters = 20
+        self.create_players(Mlx5DcStreamsRes,
+                            qp_count=1, send_ops_flags=e.IBV_QP_EX_WITH_SEND)
+        self.client.set_bad_flow(DCI_TEST_BAD_FLOW_WITHOUT_RESET)
+        self.client.traffic_with_bad_flow(**self.traffic_args)

@@ -2,17 +2,21 @@
 # Copyright (c) 2019 Mellanox Technologies, Inc. All rights reserved. See COPYING file
 
 from libc.stdint cimport uintptr_t, uint8_t, uint16_t, uint32_t
-from libc.stdlib cimport calloc, free, malloc
-from libc.string cimport memcpy
+from libc.string cimport memcpy, memset
+from libc.stdlib cimport calloc, free
 from posix.mman cimport munmap
 import logging
+import weakref
 
 from pyverbs.providers.mlx5.mlx5dv_mkey cimport Mlx5MrInterleaved, Mlx5Mkey, \
     Mlx5MkeyConfAttr, Mlx5SigBlockAttr
+from pyverbs.providers.mlx5.mlx5dv_crypto cimport Mlx5CryptoLoginAttr, Mlx5CryptoAttr
 from pyverbs.pyverbs_error import PyverbsUserError, PyverbsRDMAError, PyverbsError
+from pyverbs.providers.mlx5.dr_action cimport DrActionFlowCounter, DrActionDestTir
 from pyverbs.providers.mlx5.mlx5dv_sched cimport Mlx5dvSchedLeaf
-cimport pyverbs.providers.mlx5.mlx5dv_enums as dve
+cimport pyverbs.providers.mlx5.mlx5_enums as dve
 cimport pyverbs.providers.mlx5.libmlx5 as dv
+from pyverbs.mem_alloc import posix_memalign
 from pyverbs.qp cimport QPInitAttrEx, QPEx
 from pyverbs.base import PyverbsRDMAErrno
 from pyverbs.base cimport close_weakrefs
@@ -61,6 +65,19 @@ cdef char* _prepare_devx_outbox(outlen):
     if out_mailbox == NULL:
         raise MemoryError('Failed to allocate memory')
     return out_mailbox
+
+
+cdef uintptr_t copy_data_to_addr(uintptr_t addr, data):
+    """
+    Auxiliary function that copies data to memory at provided address.
+    :param addr: Address to copy the data to
+    :param data: Data to copy
+    :return: The incremented address to the end of the written data
+    """
+    cdef bytes py_bytes = bytes(data)
+    cdef char *tmp = py_bytes
+    memcpy(<void *>addr, tmp, len(data))
+    return addr + len(data)
 
 
 cdef class Mlx5DVPortAttr(PyverbsObject):
@@ -138,6 +155,120 @@ cdef class Mlx5DVContextAttr(PyverbsObject):
         self.attr.comp_mask = val
 
 
+cdef class Mlx5DevxObj(PyverbsCM):
+    """
+    Represents mlx5dv_devx_obj C struct.
+    """
+    def __init__(self, Context context, in_, outlen):
+        """
+        Creates a DevX object.
+        If the object was successfully created, the command's output would be
+        stored as a memoryview in self.out_view.
+        :param in_: Bytes of the obj_create command's input data provided in a
+                    device specification format.
+                    (Stream of bytes or __bytes__ is implemented)
+        :param outlen: Expected output length in bytes
+        """
+        super().__init__()
+        in_bytes = bytes(in_)
+        cdef char *in_mailbox = _prepare_devx_inbox(in_bytes)
+        cdef char *out_mailbox = _prepare_devx_outbox(outlen)
+        self.obj = dv.mlx5dv_devx_obj_create(context.context, in_mailbox,
+                                             len(in_bytes), out_mailbox, outlen)
+        try:
+            if self.obj == NULL:
+                raise PyverbsRDMAErrno('Failed to create DevX object')
+            self.out_view = memoryview(out_mailbox[:outlen])
+            status = hex(self.out_view[0])
+            syndrome = self.out_view[4:8].hex()
+            if status != hex(0):
+                raise PyverbsRDMAError('Failed to create DevX object with status'
+                                       f'({status}) and syndrome (0x{syndrome})')
+        finally:
+            free(in_mailbox)
+            free(out_mailbox)
+        self.context = context
+        self.context.add_ref(self)
+        self.flow_counter_actions = weakref.WeakSet()
+        self.dest_tir_actions = weakref.WeakSet()
+
+    def query(self, in_, outlen):
+        """
+        Queries the DevX object.
+        :param in_: Bytes of the obj_query command's input data provided in a
+                    device specification format.
+                    (Stream of bytes or __bytes__ is implemented)
+        :param outlen: Expected output length in bytes
+        :return: Bytes of the command's output
+        """
+        in_bytes = bytes(in_)
+        cdef char *in_mailbox = _prepare_devx_inbox(in_bytes)
+        cdef char *out_mailbox = _prepare_devx_outbox(outlen)
+        rc = dv.mlx5dv_devx_obj_query(self.obj, in_mailbox, len(in_bytes),
+                                      out_mailbox, outlen)
+        try:
+            if rc:
+                raise PyverbsRDMAError('Failed to query DevX object', rc)
+            out = <bytes>out_mailbox[:outlen]
+        finally:
+            free(in_mailbox)
+            free(out_mailbox)
+        return out
+
+    def modify(self, in_, outlen):
+        """
+        Modifies the DevX object.
+        :param in_: Bytes of the obj_modify command's input data provided in a
+                    device specification format.
+                    (Stream of bytes or __bytes__ is implemented)
+        :param outlen: Expected output length in bytes
+        :return: Bytes of the command's output
+        """
+        in_bytes = bytes(in_)
+        cdef char *in_mailbox = _prepare_devx_inbox(in_bytes)
+        cdef char *out_mailbox = _prepare_devx_outbox(outlen)
+        rc = dv.mlx5dv_devx_obj_modify(self.obj, in_mailbox, len(in_bytes),
+                                       out_mailbox, outlen)
+        try:
+            if rc:
+                raise PyverbsRDMAError('Failed to modify DevX object', rc)
+            out = <bytes>out_mailbox[:outlen]
+        finally:
+            free(in_mailbox)
+            free(out_mailbox)
+        return out
+
+    cdef add_ref(self, obj):
+        if isinstance(obj, DrActionFlowCounter):
+            self.flow_counter_actions.add(obj)
+        elif isinstance(obj, DrActionDestTir):
+            self.dest_tir_actions.add(obj)
+        else:
+            raise PyverbsError('Unrecognized object type')
+
+    @property
+    def out_view(self):
+        return self.out_view
+
+    @property
+    def obj(self):
+        return <object>self.obj
+
+    def __dealloc__(self):
+        self.close()
+
+    cpdef close(self):
+        if self.obj != NULL:
+            if self.logger:
+                self.logger.debug('Closing Mlx5DvexObj')
+            close_weakrefs([self.flow_counter_actions, self.dest_tir_actions])
+            rc = dv.mlx5dv_devx_obj_destroy(self.obj)
+            if rc:
+                raise PyverbsRDMAError('Failed to destroy a DevX object', rc)
+            self.obj = NULL
+            self.context = None
+
+
 cdef class Mlx5Context(Context):
     """
     Represent mlx5 context, which extends Context.
@@ -156,6 +287,9 @@ cdef class Mlx5Context(Context):
         if self.context == NULL:
             raise PyverbsRDMAErrno('Failed to open mlx5 context on {dev}'
                                    .format(dev=self.name))
+        self.devx_umems = weakref.WeakSet()
+        self.devx_objs = weakref.WeakSet()
+        self.devx_eqs = weakref.WeakSet()
 
     def query_mlx5_device(self, comp_mask=-1):
         """
@@ -175,7 +309,11 @@ cdef class Mlx5Context(Context):
                 dve.MLX5DV_CONTEXT_MASK_DYN_BFREGS |\
                 dve.MLX5DV_CONTEXT_MASK_CLOCK_INFO_UPDATE |\
                 dve.MLX5DV_CONTEXT_MASK_DC_ODP_CAPS |\
-                dve.MLX5DV_CONTEXT_MASK_FLOW_ACTION_FLAGS
+                dve.MLX5DV_CONTEXT_MASK_FLOW_ACTION_FLAGS |\
+                dve.MLX5DV_CONTEXT_MASK_DCI_STREAMS |\
+                dve.MLX5DV_CONTEXT_MASK_WR_MEMCPY_LENGTH |\
+                dve.MLX5DV_CONTEXT_MASK_CRYPTO_OFFLOAD |\
+                dve.MLX5DV_CONTEXT_MASK_MAX_DC_RD_ATOM
         else:
             dv_attr.comp_mask = comp_mask
         rc = dv.mlx5dv_query_device(self.context, &dv_attr.dv)
@@ -214,6 +352,42 @@ cdef class Mlx5Context(Context):
         rc = dv.mlx5dv_reserved_qpn_dealloc(ctx.context, qpn)
         if rc != 0:
             raise PyverbsRDMAError(f'Failed to dealloc QP number {qpn}.', rc)
+
+    @staticmethod
+    def crypto_login(Context ctx, Mlx5CryptoLoginAttr login_attr):
+        """
+        Creates a crypto login session
+        :param ctx: The device context to issue the action on.
+        :param login_attr: Mlx5CryptoLoginAttr object which contains the
+                           credential to login with and the import KEK to be
+                           used for secured communications.
+        """
+        rc = dv.mlx5dv_crypto_login(ctx.context, &login_attr.mlx5dv_crypto_login_attr)
+        if rc != 0:
+            raise PyverbsRDMAError(f'Failed to create crypto login session.', rc)
+
+    @staticmethod
+    def query_login_state(Context ctx):
+        """
+        Queries the state of the current crypto login session.
+        :param ctx: The device context to issue the action on.
+        :return: The login state.
+        """
+        cdef dv.mlx5dv_crypto_login_state state
+        rc = dv.mlx5dv_crypto_login_query_state(ctx.context, &state)
+        if rc != 0:
+            raise PyverbsRDMAError(f'Failed to query the crypto login session state.', rc)
+        return state
+
+    @staticmethod
+    def crypto_logout(Context ctx):
+        """
+        Logs out from the current crypto login session.
+        :param ctx: The device context to issue the action on.
+        """
+        rc = dv.mlx5dv_crypto_logout(ctx.context)
+        if rc != 0:
+            raise PyverbsRDMAError(f'Failed to logout from crypto login session.', rc)
 
     def devx_general_cmd(self, in_, outlen):
         """
@@ -259,12 +433,37 @@ cdef class Mlx5Context(Context):
         free(clock_info)
         return ns_time
 
+    def devx_query_eqn(self, vector):
+        """
+        Query EQN for a given vector id.
+        :param vector: Completion vector number
+        :return: The device EQ number which relates to the given input vector
+        """
+        cdef uint32_t eqn
+        rc = dv.mlx5dv_devx_query_eqn(self.context, vector, &eqn)
+        if rc:
+            raise PyverbsRDMAError('Failed to query EQN', rc)
+        return eqn
+
+    cdef add_ref(self, obj):
+        try:
+            Context.add_ref(self, obj)
+        except PyverbsError:
+            if isinstance(obj, Mlx5UMEM):
+                self.devx_umems.add(obj)
+            elif isinstance(obj, Mlx5DevxObj):
+                self.devx_objs.add(obj)
+            elif isinstance(obj, Mlx5DevxEq):
+                self.devx_eqs.add(obj)
+            else:
+                raise PyverbsError('Unrecognized object type')
+
     def __dealloc__(self):
         self.close()
 
     cpdef close(self):
         if self.context != NULL:
-            close_weakrefs([self.pps])
+            close_weakrefs([self.pps, self.devx_objs, self.devx_umems, self.devx_eqs])
             super(Mlx5Context, self).close()
 
 
@@ -321,8 +520,28 @@ cdef class Mlx5DVContext(PyverbsObject):
         return self.dv.dc_odp_caps
 
     @property
+    def crypto_caps(self):
+        return self.dv.crypto_caps
+
+    @property
     def num_lag_ports(self):
         return self.dv.num_lag_ports
+
+    @property
+    def dci_streams_caps(self):
+        return self.dv.dci_streams_caps
+
+    @property
+    def max_wr_memcpy_length(self):
+        return self.dv.max_wr_memcpy_length
+
+    @property
+    def max_dc_rd_atom(self):
+        return self.dv.max_dc_rd_atom
+
+    @property
+    def max_dc_init_rd_atom(self):
+        return self.dv.max_dc_init_rd_atom
 
     def __str__(self):
         print_format = '{:20}: {:<20}\n'
@@ -348,12 +567,17 @@ cdef class Mlx5DVContext(PyverbsObject):
                                    self.dv.striding_rq_caps.max_single_wqe_log_num_of_strides) +\
                ident_format.format('supported QP types',
                                    qpts_to_str(self.dv.striding_rq_caps.supported_qpts))
+        stream = 'DCI stream caps:\n' +\
+                  ident_format.format('max log num concurrent streams',
+                                      self.dv.dci_streams_caps.max_log_num_concurent) +\
+                  ident_format.format('max log num errored streams',
+                                      self.dv.dci_streams_caps.max_log_num_errored)
         return print_format.format('Version', self.dv.version) +\
                print_format.format('Flags',
                                    context_flags_to_str(self.dv.flags)) +\
                print_format.format('comp mask',
                                    context_comp_mask_to_str(self.dv.comp_mask)) +\
-               cqe + swp + strd +\
+               cqe + swp + strd + stream +\
                print_format.format('Tunnel offloads caps',
                                    tunnel_offloads_to_str(self.dv.tunnel_offloads_caps)) +\
                print_format.format('Max dynamic BF registers',
@@ -363,7 +587,48 @@ cdef class Mlx5DVContext(PyverbsObject):
                print_format.format('Flow action flags',
                                    self.dv.flow_action_flags) +\
                print_format.format('DC ODP caps', self.dv.dc_odp_caps) +\
-               print_format.format('Num LAG ports', self.dv.num_lag_ports)
+               print_format.format('Num LAG ports', self.dv.num_lag_ports) +\
+               print_format.format('Max WR memcpy length', self.dv.max_wr_memcpy_length) +\
+               print_format.format('Max DC Read Atomic', self.dv.max_dc_rd_atomic) +\
+               print_format.format('Max DC Init Read Atomic', self.dv.max_dc_init_rd_atomic)
+
+
+cdef class Mlx5DCIStreamInitAttr(PyverbsObject):
+    """
+    Represents dci_streams struct, which defines initial attributes
+    for DC QP creation.
+    """
+    def __init__(self, log_num_concurent=0, log_num_errored=0):
+        """
+        Initializes an Mlx5DCIStreamInitAttr object with the given DC
+        log_num_concurent and log_num_errored.
+        :param log_num_concurent: Number of dci stream channels.
+        :param log_num_errored: Number of dci error stream channels
+                                before moving DCI to error.
+        :return: An initialized object
+        """
+        super().__init__()
+        self.dci_streams.log_num_concurent = log_num_concurent
+        self.dci_streams.log_num_errored = log_num_errored
+
+    def __str__(self):
+        print_format = '{:20}: {:<20}\n'
+        return print_format.format('DCI Stream log_num_concurent', self.dci_streams.log_num_concurent) +\
+               print_format.format('DCI Stream log_num_errored', self.dci_streams.log_num_errored)
+
+    @property
+    def log_num_concurent(self):
+        return self.dci_streams.log_num_concurent
+    @log_num_concurent.setter
+    def log_num_concurent(self, val):
+        self.dci_streams.log_num_concurent=val
+
+    @property
+    def log_num_errored(self):
+        return self.dci_streams.log_num_errored
+    @log_num_errored.setter
+    def log_num_errored(self, val):
+        self.dci_streams.log_num_errored=val
 
 
 cdef class Mlx5DVDCInitAttr(PyverbsObject):
@@ -371,22 +636,28 @@ cdef class Mlx5DVDCInitAttr(PyverbsObject):
     Represents mlx5dv_dc_init_attr struct, which defines initial attributes
     for DC QP creation.
     """
-    def __init__(self, dc_type=dve.MLX5DV_DCTYPE_DCI, dct_access_key=0):
+    def __init__(self, dc_type=dve.MLX5DV_DCTYPE_DCI, dct_access_key=0, dci_streams=None):
         """
         Initializes an Mlx5DVDCInitAttr object with the given DC type and DCT
         access key.
         :param dc_type: Which DC QP to create (DCI/DCT).
         :param dct_access_key: Access key to be used by the DCT
+        :param dci_streams: Mlx5DCIStreamInitAttr
         :return: An initializes object
         """
         super().__init__()
         self.attr.dc_type = dc_type
         self.attr.dct_access_key = dct_access_key
+        if dci_streams is not None:
+            self.attr.dci_streams.log_num_concurent=dci_streams.log_num_concurent
+            self.attr.dci_streams.log_num_errored=dci_streams.log_num_errored
 
     def __str__(self):
         print_format = '{:20}: {:<20}\n'
         return print_format.format('DC type', dc_type_to_str(self.attr.dc_type)) +\
-               print_format.format('DCT access key', self.attr.dct_access_key)
+               print_format.format('DCT access key', self.attr.dct_access_key) +\
+               print_format.format('DCI Stream log_num_concurent', self.attr.dci_streams.log_num_concurent) +\
+               print_format.format('DCI Stream log_num_errored', self.attr.dci_streams.log_num_errored)
 
     @property
     def dc_type(self):
@@ -402,6 +673,12 @@ cdef class Mlx5DVDCInitAttr(PyverbsObject):
     def dct_access_key(self, val):
         self.attr.dct_access_key = val
 
+    @property
+    def dci_streams(self):
+        return self.attr.dci_streams
+    @dci_streams.setter
+    def dci_streams(self, val):
+        self.attr.dci_streams=val
 
 cdef class Mlx5DVQPInitAttr(PyverbsObject):
     """
@@ -424,7 +701,10 @@ cdef class Mlx5DVQPInitAttr(PyverbsObject):
         self.attr.send_ops_flags = send_ops_flags
         if dc_init_attr is not None:
             self.attr.dc_init_attr.dc_type = dc_init_attr.dc_type
-            self.attr.dc_init_attr.dct_access_key = dc_init_attr.dct_access_key
+            if comp_mask & dve.MLX5DV_QP_INIT_ATTR_MASK_DCI_STREAMS:
+                self.attr.dc_init_attr.dci_streams = dc_init_attr.dci_streams
+            else:
+                self.attr.dc_init_attr.dct_access_key = dc_init_attr.dct_access_key
 
     def __str__(self):
         print_format = '{:20}: {:<20}\n'
@@ -435,6 +715,10 @@ cdef class Mlx5DVQPInitAttr(PyverbsObject):
                'DC init attr:\n' +\
                print_format.format('  DC type',
                                    dc_type_to_str(self.attr.dc_init_attr.dc_type)) +\
+               print_format.format('  DCI Stream log_num_concurent',
+                                   self.attr.dc_init_attr.dci_streams.log_num_concurent) +\
+               print_format.format('  DCI Stream log_num_errored',
+                                   self.attr.dc_init_attr.dci_streams.log_num_errored) +\
                print_format.format('  DCT access key',
                                    self.attr.dc_init_attr.dct_access_key) +\
                print_format.format('Send ops flags',
@@ -474,6 +758,14 @@ cdef class Mlx5DVQPInitAttr(PyverbsObject):
     @dct_access_key.setter
     def dct_access_key(self, val):
         self.attr.dc_init_attr.dct_access_key = val
+
+    @property
+    def dci_streams(self):
+        return self.attr.dc_init_attr.dci_streams
+    @dci_streams.setter
+    def dci_streams(self, val):
+        self.attr.dc_init_attr.dci_streams=val
+
 
 cdef copy_mr_interleaved_array(dv.mlx5dv_mr_interleaved *mr_interleaved_p,
                                mr_interleaved_lst):
@@ -646,6 +938,14 @@ cdef class Mlx5QP(QPEx):
                                                  mr_interleaved_p)
         free(mr_interleaved_p)
 
+    def wr_set_mkey_crypto(self, Mlx5CryptoAttr attr):
+        """
+        Configure a MKey for crypto operation.
+        :param attr: crypto attributes to set for the mkey.
+        """
+        dv.mlx5dv_wr_set_mkey_crypto(dv.mlx5dv_qp_ex_from_ibv_qp_ex(self.qp_ex),
+                                     &attr.mlx5dv_crypto_attr)
+
     def wr_set_mkey_sig_block(self, Mlx5SigBlockAttr block_attr):
         """
         Configure a MKEY for block signature (data integrity) operation.
@@ -653,6 +953,18 @@ cdef class Mlx5QP(QPEx):
         """
         dv.mlx5dv_wr_set_mkey_sig_block(dv.mlx5dv_qp_ex_from_ibv_qp_ex(self.qp_ex),
                                         &block_attr.mlx5dv_sig_block_attr)
+
+    def wr_memcpy(self, dest_lkey, dest_addr, src_lkey, src_addr, length):
+        """
+        Copies memory data on PCI bus using DMA functionality of the device.
+        :param dest_lkey: Local key of the mkey to copy data to
+        :param dest_addr: Memory address to copy data to
+        :param src_lkey: Local key of the mkey to copy data from
+        :param src_addr: Memory address to copy data from
+        :param length: Length of data to be copied
+        """
+        dv.mlx5dv_wr_memcpy(dv.mlx5dv_qp_ex_from_ibv_qp_ex(self.qp_ex),
+                            dest_lkey, dest_addr, src_lkey, src_addr, length)
 
     def cancel_posted_send_wrs(self, wr_id):
         """
@@ -666,6 +978,18 @@ cdef class Mlx5QP(QPEx):
         if rc < 0:
             raise PyverbsRDMAError(f'Failed to cancel send WRs', -rc)
         return rc
+
+    def wr_set_dc_addr_stream(self, AH ah, remote_dctn, remote_dc_key, stream_id):
+        """
+        Attach a DC info to the last work request.
+        :param ah: Address Handle to the requested DCT.
+        :param remote_dctn: The remote DCT number.
+        :param remote_dc_key: The remote DC key.
+        :param stream_id: DCI stream channel_id
+        """
+        dv.mlx5dv_wr_set_dc_addr_stream(dv.mlx5dv_qp_ex_from_ibv_qp_ex(self.qp_ex),
+                                        ah.ah, remote_dctn, remote_dc_key,
+                                        stream_id)
 
     @staticmethod
     def query_lag_port(QP qp):
@@ -732,6 +1056,18 @@ cdef class Mlx5QP(QPEx):
         rc = dv.mlx5dv_map_ah_to_qp(ah.ah, qp_num)
         if rc != 0:
             raise PyverbsRDMAError(f'Failed to map AH to QP #{qp_num}', rc)
+
+    @staticmethod
+    def modify_dci_stream_channel_id(QP qp, uint16_t stream_id):
+        """
+        Reset an errored stream_id in the HW DCI context.
+        :param qp: A DCI QP in RTS state.
+        :param stream_id: The desired stream_id that need to be reset.
+        """
+        rc = dv.mlx5dv_dci_stream_id_reset(qp.qp, stream_id)
+        if rc != 0:
+            raise PyverbsRDMAError(f'Failed to reset stream_id #{stream_id} for DCI QP'
+                                   f'#{qp.qp.qp_num}', rc)
 
 
 cdef class Mlx5DVCQInitAttr(PyverbsObject):
@@ -926,7 +1262,8 @@ def dc_type_to_str(dctype):
 def qp_comp_mask_to_str(flags):
     l = {dve.MLX5DV_QP_INIT_ATTR_MASK_QP_CREATE_FLAGS: 'Create flags',
          dve.MLX5DV_QP_INIT_ATTR_MASK_DC: 'DC',
-         dve.MLX5DV_QP_INIT_ATTR_MASK_SEND_OPS_FLAGS: 'Send ops flags'}
+         dve.MLX5DV_QP_INIT_ATTR_MASK_SEND_OPS_FLAGS: 'Send ops flags',
+         dve.MLX5DV_QP_INIT_ATTR_MASK_DCI_STREAMS: 'DCI Stream'}
     return bitmask_to_str(flags, l)
 
 
@@ -1067,6 +1404,10 @@ cdef class Mlx5UAR(PyverbsObject):
     @property
     def comp_mask(self):
         return self.uar.comp_mask
+
+    @property
+    def uar(self):
+        return <uintptr_t>self.uar
 
 
 cdef class Mlx5DmOpAddr(PyverbsCM):
@@ -1271,7 +1612,8 @@ cdef class Wqe(PyverbsCM):
         Create a Wqe with <segments>, in case an address <addr> was not passed
         by the user, memory would be allocated according to the size needed and
         the segments are copied over to the buffer.
-        :param segments: The segments (ctrl, data) of the Wqe
+        :param segments: The segments (ctrl, data) of the Wqe as PRM format or
+                         WqeSeg instance.
         :param addr: User address to write the WQE on (Optional)
         """
         self.segments = segments
@@ -1280,12 +1622,16 @@ cdef class Wqe(PyverbsCM):
             self.addr = <void*><uintptr_t> addr
         else:
             self.is_user_addr = False
-            allocation_size = sum(map(lambda x: x.sizeof(), self.segments))
+            allocation_size = sum(map(lambda x: x.sizeof() if isinstance(x, WqeSeg) else len(x),
+                                      self.segments))
             self.addr = calloc(allocation_size, 1)
         addr = <uintptr_t>self.addr
         for seg in self.segments:
-            seg._copy_to_buffer(addr)
-            addr += seg.sizeof()
+            if isinstance(seg, WqeSeg):
+                seg._copy_to_buffer(addr)
+                addr += seg.sizeof()
+            else:  # PRM format
+                addr = copy_data_to_addr(addr, seg)
 
     @property
     def address(self):
@@ -1307,3 +1653,233 @@ cdef class Wqe(PyverbsCM):
             if not self.is_user_addr:
                 free(self.addr)
             self.addr = NULL
+
+
+cdef class Mlx5UMEM(PyverbsCM):
+    def __init__(self, Context context not None, size, addr=None, alignment=64,
+                 access=0, pgsz_bitmap=0, comp_mask=0, dmabuf_fd=0):
+        """
+        User memory object to be used by the DevX interface.
+        If pgsz_bitmap or comp_mask were passed, the extended umem registration
+        will be used.
+        :param context: RDMA device context to create the action on
+        :param size: The size of the addr buffer (or the internal buffer to be
+                     allocated if addr is None)
+        :param alignment: The alignment of the internally allocated buffer
+                          (Valid if addr is None)
+        :param addr: The memory start address to register (if None, the address
+                     will be allocated internally)
+        :param access: The desired memory protection attributes (default: 0)
+        :param pgsz_bitmap: Represents the required page sizes
+        :param comp_mask: Compatibility mask
+        :param dmabuf_fd: FD of a dmabuf
+        """
+        super().__init__()
+        cdef dv.mlx5dv_devx_umem_in umem_in
+
+        if addr is not None:
+            self.addr = <void*><uintptr_t>addr
+            self.is_user_addr = True
+        else:
+            self.addr = <void*><uintptr_t>posix_memalign(size, alignment)
+            memset(self.addr, 0, size)
+            self.is_user_addr = False
+
+        if pgsz_bitmap or comp_mask:
+            umem_in.addr = self.addr
+            umem_in.size = size
+            umem_in.access = access
+            umem_in.pgsz_bitmap = pgsz_bitmap
+            umem_in.comp_mask = comp_mask
+            umem_in.dmabuf_fd = dmabuf_fd
+            self.umem = dv.mlx5dv_devx_umem_reg_ex(context.context, &umem_in)
+        else:
+            self.umem = dv.mlx5dv_devx_umem_reg(context.context, self.addr,
+                                                size, access)
+        if self.umem == NULL:
+            raise PyverbsRDMAErrno("Failed to register a UMEM.")
+        self.context = context
+        self.context.add_ref(self)
+
+    def __dealloc__(self):
+        self.close()
+
+    cpdef close(self):
+        if self.umem != NULL:
+            if self.logger:
+                self.logger.debug('Closing Mlx5UMEM')
+            rc = dv.mlx5dv_devx_umem_dereg(self.umem)
+            try:
+                if rc:
+                    raise PyverbsError("Failed to dereg UMEM.", rc)
+            finally:
+                if not self.is_user_addr:
+                    free(self.addr)
+            self.umem = NULL
+            self.context = None
+
+    def __str__(self):
+        print_format = '{:20}: {:<20}\n'
+        return print_format.format('umem id', self.umem_id) + \
+               print_format.format('reg addr', self.umem_addr)
+
+    @property
+    def umem_id(self):
+        return self.umem.umem_id
+
+    @property
+    def umem_addr(self):
+        if self.addr:
+            return <uintptr_t><void*>self.addr
+
+
+cdef class Mlx5Cqe64(PyverbsObject):
+    def __init__(self, addr):
+        self.cqe = <dv.mlx5_cqe64*><uintptr_t> addr
+
+    def dump(self):
+        dump_format = '{:08x} {:08x} {:08x} {:08x}\n'
+        str = ''
+        for i in range(0, 16, 4):
+            str += dump_format.format(be32toh((<uint32_t*>self.cqe)[i]),
+                                      be32toh((<uint32_t*>self.cqe)[i + 1]),
+                                      be32toh((<uint32_t*>self.cqe)[i + 2]),
+                                      be32toh((<uint32_t*>self.cqe)[i + 3]))
+        return str
+
+    def is_empty(self):
+        for i in range(16):
+            if be32toh((<uint32_t*>self.cqe)[i]) != 0:
+                return False
+        return True
+
+    @property
+    def owner(self):
+        return dv.mlx5dv_get_cqe_owner(self.cqe)
+    @owner.setter
+    def owner(self, val):
+        dv.mlx5dv_set_cqe_owner(self.cqe, <uint8_t> val)
+
+    @property
+    def se(self):
+        return dv.mlx5dv_get_cqe_se(self.cqe)
+
+    @property
+    def format(self):
+        return dv.mlx5dv_get_cqe_format(self.cqe)
+
+    @property
+    def opcode(self):
+        return dv.mlx5dv_get_cqe_opcode(self.cqe)
+
+    @property
+    def imm_inval_pkey(self):
+        return be32toh(self.cqe.imm_inval_pkey)
+
+    @property
+    def wqe_id(self):
+        return be16toh(self.cqe.wqe_id)
+
+    @property
+    def byte_cnt(self):
+        return be32toh(self.cqe.byte_cnt)
+
+    @property
+    def timestamp(self):
+        return be64toh(self.cqe.timestamp)
+
+    @property
+    def wqe_counter(self):
+        return be16toh(self.cqe.wqe_counter)
+
+    @property
+    def signature(self):
+        return self.cqe.signature
+
+    @property
+    def op_own(self):
+        return self.cqe.op_own
+
+    def __str__(self):
+        return (<dv.mlx5_cqe64>((<dv.mlx5_cqe64*>self.cqe)[0])).__str__()
+
+cdef class Mlx5DevxMsiVector(PyverbsCM):
+    """
+    Represents mlx5dv_devx_msi_vector C struct.
+    """
+    def __init__(self, Context context):
+        super().__init__()
+        self.msi_vector = dv.mlx5dv_devx_alloc_msi_vector(context.context)
+        if self.msi_vector == NULL:
+            raise PyverbsRDMAErrno('Failed to allocate an msi_vector')
+
+    @property
+    def vector(self):
+        return self.msi_vector.vector
+
+    @property
+    def fd(self):
+        return self.msi_vector.fd
+
+    cpdef close(self):
+        if self.msi_vector != NULL:
+            rc = dv.mlx5dv_devx_free_msi_vector(self.msi_vector)
+            if rc:
+                raise PyverbsRDMAError('Failed to free the msi_vector', rc)
+        self.msi_vector = NULL
+
+
+cdef class Mlx5DevxEq(PyverbsCM):
+    """
+    Represents mlx5dv_devx_eq C struct.
+    """
+    def __init__(self, Context context, in_, outlen):
+        """
+        Creates a DevX EQ object.
+        If the object was successfully created, the command's output would be
+        stored as a memoryview in self.out_view.
+        :param in_: Bytes of the obj_create command's input data provided in a
+                    device specification format.
+                    (Stream of bytes or __bytes__ is implemented)
+        :param outlen: Expected output length in bytes
+        """
+        super().__init__()
+        in_bytes = bytes(in_)
+        cdef char *in_mailbox = _prepare_devx_inbox(in_bytes)
+        cdef char *out_mailbox = _prepare_devx_outbox(outlen)
+        self.eq = dv.mlx5dv_devx_create_eq(context.context, in_mailbox,
+                                           len(in_bytes), out_mailbox, outlen)
+        try:
+            if self.eq == NULL:
+                raise PyverbsRDMAErrno('Failed to create async EQ object')
+            self.out_view = memoryview(out_mailbox[:outlen])
+            status = hex(self.out_view[0])
+            syndrome = self.out_view[4:8].hex()
+            if status != hex(0):
+                raise PyverbsRDMAError('Failed to create async EQ object with status'
+                                       f'({status}) and syndrome (0x{syndrome})')
+        finally:
+            free(in_mailbox)
+            free(out_mailbox)
+        self.context = context
+        self.context.add_ref(self)
+
+    @property
+    def out_view(self):
+        return self.out_view
+
+    @property
+    def vaddr(self):
+        return <uintptr_t><void*>self.eq.vaddr
+
+    def __dealloc__(self):
+        self.close()
+
+    cpdef close(self):
+        if self.eq != NULL:
+            self.logger.debug('Closing Mlx5DevxEq')
+            rc = dv.mlx5dv_devx_destroy_eq(self.eq)
+            if rc:
+                raise PyverbsRDMAError('Failed to destroy a DevX EQ object', rc)
+            self.eq = NULL
+            self.context = None

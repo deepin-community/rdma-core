@@ -1,8 +1,5 @@
 .\" Man page generated from reStructuredText.
 .
-.TH CHECK_LFT_BALANCE 8 "2017-08-21" "" "Open IB Diagnostics"
-.SH NAME
-check_lft_balance \- check InfiniBand unicast forwarding tables balance
 .
 .nr rst2man-indent-level 0
 .
@@ -30,6 +27,9 @@ level margin: \\n[rst2man-indent\\n[rst2man-indent-level]]
 .\" new: \\n[rst2man-indent\\n[rst2man-indent-level]]
 .in \\n[rst2man-indent\\n[rst2man-indent-level]]u
 ..
+.TH "CHECK_LFT_BALANCE" 8 "2017-08-21" "" "Open IB Diagnostics"
+.SH NAME
+check_lft_balance \- check InfiniBand unicast forwarding tables balance
 .SH SYNOPSIS
 .sp
 check_lft_balance.sh [\-hRv]

@@ -1,8 +1,5 @@
 .\" Man page generated from reStructuredText.
 .
-.TH IBSWITCHES 8 "2016-12-20" "" "OpenIB Diagnostics"
-.SH NAME
-IBSWITCHES \- show InfiniBand switch nodes in topology
 .
 .nr rst2man-indent-level 0
 .
@@ -30,6 +27,9 @@ level margin: \\n[rst2man-indent\\n[rst2man-indent-level]]
 .\" new: \\n[rst2man-indent\\n[rst2man-indent-level]]
 .in \\n[rst2man-indent\\n[rst2man-indent-level]]u
 ..
+.TH "IBSWITCHES" 8 "2016-12-20" "" "OpenIB Diagnostics"
+.SH NAME
+IBSWITCHES \- show InfiniBand switch nodes in topology
 .SH SYNOPSIS
 .sp
 ibswitches [options] [<topology\-file>]

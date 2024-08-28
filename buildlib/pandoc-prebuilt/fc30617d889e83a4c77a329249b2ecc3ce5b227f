@@ -1,8 +1,5 @@
 .\" Man page generated from reStructuredText.
 .
-.TH IBSTATUS 8 "2017-08-21" "" "Open IB Diagnostics"
-.SH NAME
-ibstatus \- query basic status of InfiniBand device(s)
 .
 .nr rst2man-indent-level 0
 .
@@ -30,6 +27,9 @@ level margin: \\n[rst2man-indent\\n[rst2man-indent-level]]
 .\" new: \\n[rst2man-indent\\n[rst2man-indent-level]]
 .in \\n[rst2man-indent\\n[rst2man-indent-level]]u
 ..
+.TH "IBSTATUS" 8 "2017-08-21" "" "Open IB Diagnostics"
+.SH NAME
+ibstatus \- query basic status of InfiniBand device(s)
 .SH SYNOPSIS
 .sp
 ibstatus [\-h] [devname[:port]]...
