@@ -14,12 +14,15 @@ The userspace component of the libibverbs RDMA kernel drivers are included
 under the providers/ directory. Support for the following Kernel RDMA drivers
 is included:
 
+ - bnxt_re.ko
  - efa.ko
+ - erdma.ko
  - iw_cxgb4.ko
  - hfi1.ko
  - hns-roce.ko
- - i40iw.ko
+ - irdma.ko
  - ib_qib.ko
+ - mana_ib.ko
  - mlx4_ib.ko
  - mlx5_ib.ko
  - ib_mthca.ko
@@ -46,9 +49,6 @@ $ bash build.sh
 shared libraries. The build is configured to run all the programs 'in-place'
 and cannot be installed.
 
-NOTE: It is not currently easy to run from the build directory, the plugins
-only load from the system path.
-
 ### Debian Derived
 
 ```sh
@@ -60,10 +60,10 @@ Supported releases:
 * Debian 9 (stretch) or newer
 * Ubuntu 16.04 LTS (xenial) or newer
 
-### Fedora
+### Fedora, CentOS 8
 
 ```sh
-$ dnf install cmake gcc libnl3-devel libudev-devel pkgconfig valgrind-devel ninja-build python3-devel python3-Cython python3-docutils pandoc
+$ dnf builddep redhat/rdma-core.spec
 ```
 
 NOTE: Fedora Core uses the name 'ninja-build' for the 'ninja' command.
@@ -74,7 +74,7 @@ NOTE: Fedora Core uses the name 'ninja-build' for the 'ninja' command.
 $ zypper install cmake gcc libnl3-devel libudev-devel ninja pkg-config valgrind-devel python3-devel python3-Cython python3-docutils pandoc
 ```
 
-## Building on CentOS 6/7, Amazon Linux 1/2
+## Building on CentOS 7, Amazon Linux 2
 
 Install required packages:
 
@@ -139,3 +139,8 @@ In your bug report, please include:
 # Submitting patches
 
 See [Contributing to rdma-core](Documentation/contributing.md).
+
+# Stable branches
+
+Stable versions are released regularly with backported fixes (see Documentation/stable.md)
+The current minimum version still maintained is 'v30.X'

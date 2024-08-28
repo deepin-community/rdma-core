@@ -1,8 +1,5 @@
 .\" Man page generated from reStructuredText.
 .
-.TH IBADDR 8 "2013-10-11" "" "OpenIB Diagnostics"
-.SH NAME
-IBADDR \- query InfiniBand address(es)
 .
 .nr rst2man-indent-level 0
 .
@@ -30,6 +27,9 @@ level margin: \\n[rst2man-indent\\n[rst2man-indent-level]]
 .\" new: \\n[rst2man-indent\\n[rst2man-indent-level]]
 .in \\n[rst2man-indent\\n[rst2man-indent-level]]u
 ..
+.TH "IBADDR" 8 "2013-10-11" "" "OpenIB Diagnostics"
+.SH NAME
+IBADDR \- query InfiniBand address(es)
 .SH SYNOPSIS
 .sp
 ibaddr [options]
@@ -83,7 +83,7 @@ Examples:
 .
 .INDENT 0.0
 .TP
-.B \-d
+.B  \-d
 raise the IB debugging level.
 May be used several times (\-ddd or \-d \-d \-d).
 .UNINDENT
@@ -91,7 +91,7 @@ May be used several times (\-ddd or \-d \-d \-d).
 .
 .INDENT 0.0
 .TP
-.B \-e
+.B  \-e
 show send and receive errors (timeouts and others)
 .UNINDENT
 .\" Define the common option -h

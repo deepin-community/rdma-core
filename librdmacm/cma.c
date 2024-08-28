@@ -304,13 +304,14 @@ static void remove_cma_dev(struct cma_device *cma_dev)
 		ibv_dealloc_pd(cma_dev->pd);
 	if (cma_dev->verbs)
 		ibv_close_device(cma_dev->verbs);
+	free(cma_dev->port);
 	list_del_from(&cma_dev_list, &cma_dev->entry);
 	free(cma_dev);
 }
 
 static int dev_cmp(const void *a, const void *b)
 {
-	return (int)(*(char *const *)a - *(char *const *)b);
+	return (*(uintptr_t *)a > *(uintptr_t *)b) - (*(uintptr_t *)a < *(uintptr_t *)b);
 }
 
 static int sync_devices_list(void)
@@ -419,7 +420,8 @@ err1:
 
 static bool match(struct cma_device *cma_dev, __be64 guid, uint32_t idx)
 {
-	if (idx == UCMA_INVALID_IB_INDEX)
+	if ((idx == UCMA_INVALID_IB_INDEX) ||
+	    (cma_dev->ibv_idx == UCMA_INVALID_IB_INDEX))
 		return cma_dev->guid == guid;
 
 	return cma_dev->ibv_idx == idx && cma_dev->guid == guid;
@@ -483,12 +485,13 @@ static int ucma_init_all(void)
 		if (dev->is_device_dead)
 			continue;
 
-		ret = ucma_init_device(dev);
-		if (ret)
-			break;
+		if (ucma_init_device(dev)) {
+			/* Couldn't initialize the device: mark it dead and continue */
+			dev->is_device_dead = true;
+		}
 	}
 	pthread_mutex_unlock(&mut);
-	return ret;
+	return 0;
 }
 
 struct ibv_context **rdma_get_devices(int *num_devices)
@@ -511,12 +514,9 @@ struct ibv_context **rdma_get_devices(int *num_devices)
 
 		/* reinit newly added devices */
 		if (ucma_init_device(dev)) {
-			cma_dev_cnt = 0;
-			/*
-			 * There is no need to uninit already
-			 * initialized devices, due to an error to other device.
-			 */
-			goto out;
+			/* Couldn't initialize the device: mark it dead and continue */
+			dev->is_device_dead = true;
+			continue;
 		}
 		cma_dev_cnt++;
 	}
@@ -1951,8 +1951,14 @@ int rdma_accept(struct rdma_cm_id *id, struct rdma_conn_param *conn_param)
 		return (ret >= 0) ? ERR(ENODATA) : -1;
 	}
 
-	if (ucma_is_ud_qp(id->qp_type))
+	if (ucma_is_ud_qp(id->qp_type)) {
+		if (id_priv->sync && id_priv->id.event) {
+			rdma_ack_cm_event(id_priv->id.event);
+			id_priv->id.event = NULL;
+		}
+
 		return 0;
+	}
 
 	return ucma_complete(id);
 }

@@ -1,8 +1,5 @@
 .\" Man page generated from reStructuredText.
 .
-.TH IBPING 8 "2012-05-14" "" "Open IB Diagnostics"
-.SH NAME
-IBPING \- ping an InfiniBand address
 .
 .nr rst2man-indent-level 0
 .
@@ -30,6 +27,9 @@ level margin: \\n[rst2man-indent\\n[rst2man-indent-level]]
 .\" new: \\n[rst2man-indent\\n[rst2man-indent-level]]
 .in \\n[rst2man-indent\\n[rst2man-indent-level]]u
 ..
+.TH "IBPING" 8 "2012-05-14" "" "Open IB Diagnostics"
+.SH NAME
+IBPING \- ping an InfiniBand address
 .SH SYNOPSIS
 .sp
 ibping [options] <dest lid | guid>
@@ -132,7 +132,7 @@ Default: /usr/local/etc/infiniband\-diags/ibdiag.conf
 .
 .INDENT 0.0
 .TP
-.B \-d
+.B  \-d
 raise the IB debugging level.
 May be used several times (\-ddd or \-d \-d \-d).
 .UNINDENT
@@ -140,7 +140,7 @@ May be used several times (\-ddd or \-d \-d \-d).
 .
 .INDENT 0.0
 .TP
-.B \-e
+.B  \-e
 show send and receive errors (timeouts and others)
 .UNINDENT
 .\" Define the common option -v

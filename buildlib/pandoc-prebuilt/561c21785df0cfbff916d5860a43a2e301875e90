@@ -1,8 +1,5 @@
 .\" Man page generated from reStructuredText.
 .
-.TH IBFINDNODESUSING 8 "2017-08-21" "" "Open IB Diagnostics"
-.SH NAME
-ibfindnodesusing \- find a list of end nodes which are routed through the specified switch and port
 .
 .nr rst2man-indent-level 0
 .
@@ -30,6 +27,9 @@ level margin: \\n[rst2man-indent\\n[rst2man-indent-level]]
 .\" new: \\n[rst2man-indent\\n[rst2man-indent-level]]
 .in \\n[rst2man-indent\\n[rst2man-indent-level]]u
 ..
+.TH "IBFINDNODESUSING" 8 "2017-08-21" "" "Open IB Diagnostics"
+.SH NAME
+ibfindnodesusing \- find a list of end nodes which are routed through the specified switch and port
 .SH SYNOPSIS
 .sp
 ibfindnodesusing.pl [options] <switch_guid|switch_name> <port>

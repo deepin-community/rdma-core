@@ -73,34 +73,6 @@ class MRTest(RDMATestCase):
         self.client_qp_attr = None
         self.traffic_args = None
 
-    def create_players(self, resource, **resource_arg):
-        """
-        Init MR tests resources.
-        :param resource: The RDMA resources to use.
-        :param resource_arg: Dict of args that specify the resource specific
-        attributes.
-        :return: None
-        """
-        self.client = resource(**self.dev_info, **resource_arg)
-        self.server = resource(**self.dev_info, **resource_arg)
-        self.client.pre_run(self.server.psns, self.server.qps_num)
-        self.server.pre_run(self.client.psns, self.client.qps_num)
-        self.sync_remote_attr()
-        self.server_qp_attr, _ = self.server.qp.query(0x1ffffff)
-        self.client_qp_attr, _ = self.client.qp.query(0x1ffffff)
-        self.traffic_args = {'client': self.client, 'server': self.server,
-                             'iters': self.iters, 'gid_idx': self.gid_index,
-                             'port': self.ib_port}
-
-    def sync_remote_attr(self):
-        """
-        Exchange the MR remote attributes between the server and the client.
-        """
-        self.server.rkey = self.client.mr.rkey
-        self.server.remote_addr = self.client.mr.buf
-        self.client.rkey = self.server.mr.rkey
-        self.client.remote_addr = self.server.mr.buf
-
     def restate_qps(self):
         """
         Restate the resources QPs from ERR back to RTS state.
@@ -142,6 +114,8 @@ class MRTest(RDMATestCase):
         succeeds.
         """
         self.create_players(MRRes)
+        self.server_qp_attr, _ = self.server.qp.query(0x1ffffff)
+        self.client_qp_attr, _ = self.client.qp.query(0x1ffffff)
         u.traffic(**self.traffic_args)
         server_new_pd = PD(self.server.ctx)
         self.server.rereg_mr(flags=e.IBV_REREG_MR_CHANGE_PD, pd=server_new_pd)
@@ -156,6 +130,8 @@ class MRTest(RDMATestCase):
 
     def test_mr_rereg_addr(self):
         self.create_players(MRRes)
+        self.server_qp_attr, _ = self.server.qp.query(0x1ffffff)
+        self.client_qp_attr, _ = self.client.qp.query(0x1ffffff)
         s_recv_wr = u.get_recv_wr(self.server)
         self.server.qp.post_recv(s_recv_wr)
         server_addr = posix_memalign(self.server.msg_size)
@@ -234,19 +210,6 @@ class MWTest(RDMATestCase):
         self.server = None
         self.client = None
 
-    def create_players(self, resource, **resource_arg):
-        """
-        Init memory window tests resources.
-        :param resource: The RDMA resources to use.
-        :param resource_arg: Dict of args that specify the resource specific
-        attributes.
-        :return: None
-        """
-        self.client = resource(**self.dev_info, **resource_arg)
-        self.server = resource(**self.dev_info, **resource_arg)
-        self.client.pre_run(self.server.psns, self.server.qps_num)
-        self.server.pre_run(self.client.psns, self.client.qps_num)
-
     def tearDown(self):
         if self.server:
             self.server.mw.close()
@@ -261,9 +224,9 @@ class MWTest(RDMATestCase):
         u.poll_cq(self.server.cq)
         u.poll_cq(self.client.cq)
         self.server.rkey = self.client.mw.rkey
-        self.server.remote_addr = self.client.mr.buf
+        self.server.raddr = self.client.mr.buf
         self.client.rkey = self.server.mw.rkey
-        self.client.remote_addr = self.server.mr.buf
+        self.client.raddr = self.server.mr.buf
 
     def bind_mw_type_2(self):
         client_send_wr = SendWR(opcode=e.IBV_WR_BIND_MW)
@@ -276,9 +239,9 @@ class MWTest(RDMATestCase):
         u.poll_cq(self.server.cq)
         u.poll_cq(self.client.cq)
         self.server.rkey = client_send_wr.rkey
-        self.server.remote_addr = self.client.mr.buf
+        self.server.raddr = self.client.mr.buf
         self.client.rkey = server_send_wr.rkey
-        self.client.remote_addr = self.server.mr.buf
+        self.client.raddr = self.server.mr.buf
 
     def invalidate_mw_type1(self):
         """
@@ -332,35 +295,30 @@ class MWTest(RDMATestCase):
     def test_mw_type1(self):
         self.create_players(MWRC, mw_type=e.IBV_MW_TYPE_1)
         self.bind_mw_type_1()
-        u.rdma_traffic(self.client, self.server, self.iters, self.gid_index,
-                       self.ib_port, send_op=e.IBV_WR_RDMA_WRITE)
+        u.rdma_traffic(**self.traffic_args, send_op=e.IBV_WR_RDMA_WRITE)
 
     def test_invalidate_mw_type1(self):
         self.test_mw_type1()
         self.invalidate_mw_type1()
         with self.assertRaisesRegex(PyverbsRDMAError, 'Remote access error'):
-            u.rdma_traffic(self.client, self.server, self.iters, self.gid_index,
-                           self.ib_port, send_op=e.IBV_WR_RDMA_WRITE)
+            u.rdma_traffic(**self.traffic_args, send_op=e.IBV_WR_RDMA_WRITE)
 
     def test_mw_type2(self):
         self.create_players(MWRC, mw_type=e.IBV_MW_TYPE_2)
         self.bind_mw_type_2()
-        u.rdma_traffic(self.client, self.server, self.iters, self.gid_index,
-                       self.ib_port, send_op=e.IBV_WR_RDMA_WRITE)
+        u.rdma_traffic(**self.traffic_args, send_op=e.IBV_WR_RDMA_WRITE)
 
     def test_mw_type2_invalidate_local(self):
         self.test_mw_type2()
         self.invalidate_mw_type2_local()
         with self.assertRaisesRegex(PyverbsRDMAError, 'Remote access error'):
-            u.rdma_traffic(self.client, self.server, self.iters, self.gid_index,
-                           self.ib_port, send_op=e.IBV_WR_RDMA_WRITE)
+            u.rdma_traffic(**self.traffic_args, send_op=e.IBV_WR_RDMA_WRITE)
 
     def test_mw_type2_invalidate_remote(self):
         self.test_mw_type2()
         self.invalidate_mw_type2_remote()
         with self.assertRaisesRegex(PyverbsRDMAError, 'Remote access error'):
-            u.rdma_traffic(self.client, self.server, self.iters, self.gid_index,
-                           self.ib_port, send_op=e.IBV_WR_RDMA_WRITE)
+            u.rdma_traffic(**self.traffic_args, send_op=e.IBV_WR_RDMA_WRITE)
 
     def test_mw_type2_invalidate_dealloc(self):
         self.test_mw_type2()
@@ -368,8 +326,7 @@ class MWTest(RDMATestCase):
         self.server.mw.close()
         self.client.mw.close()
         with self.assertRaisesRegex(PyverbsRDMAError, 'Remote access error'):
-            u.rdma_traffic(self.client, self.server, self.iters, self.gid_index,
-                           self.ib_port, send_op=e.IBV_WR_RDMA_WRITE)
+            u.rdma_traffic(**self.traffic_args, send_op=e.IBV_WR_RDMA_WRITE)
 
     def test_reg_mw_wrong_type(self):
         """
@@ -490,7 +447,7 @@ class DmaBufMRTest(PyverbsAPITestCase):
             for f in flags:
                 len = u.get_mr_length()
                 for off in [0, len//2]:
-                    with DmaBufMR(pd, len, f, offset=off, unit=self.gpu,
+                    with DmaBufMR(pd, len, f, offset=off, gpu=self.gpu,
                                   gtt=self.gtt) as mr:
                         pass
 
@@ -505,7 +462,7 @@ class DmaBufMRTest(PyverbsAPITestCase):
             for f in flags:
                 len = u.get_mr_length()
                 for off in [0, len//2]:
-                    with DmaBufMR(pd, len, f, offset=off, unit=self.gpu,
+                    with DmaBufMR(pd, len, f, offset=off, gpu=self.gpu,
                                   gtt=self.gtt) as mr:
                         mr.close()
 
@@ -520,7 +477,7 @@ class DmaBufMRTest(PyverbsAPITestCase):
             for f in flags:
                 len = u.get_mr_length()
                 for off in [0, len//2]:
-                    with DmaBufMR(pd, len, f, offset=off, unit=self.gpu,
+                    with DmaBufMR(pd, len, f, offset=off, gpu=self.gpu,
                                   gtt=self.gtt) as mr:
                         # Pyverbs supports multiple destruction of objects,
                         # we are not expecting an exception here.
@@ -529,7 +486,7 @@ class DmaBufMRTest(PyverbsAPITestCase):
 
     def test_dmabuf_reg_mr_bad_flags(self):
         """
-        Verify that illegal flags combination fails as expected
+        Verify that DmaBufMR with illegal flags combination fails as expected
         """
         check_dmabuf_support(self.gpu)
         with PD(self.ctx) as pd:
@@ -543,7 +500,7 @@ class DmaBufMRTest(PyverbsAPITestCase):
                     mr_flags += i.value
                 try:
                     DmaBufMR(pd, u.get_mr_length(), mr_flags,
-                             unit=self.gpu, gtt=self.gtt)
+                             gpu=self.gpu, gtt=self.gtt)
                 except PyverbsRDMAError as err:
                     assert 'Failed to register a dma-buf MR' in err.args[0]
                 else:
@@ -562,7 +519,7 @@ class DmaBufMRTest(PyverbsAPITestCase):
                 for f in flags:
                     for mr_off in [0, mr_len//2]:
                         with DmaBufMR(pd, mr_len, f, offset=mr_off,
-                                      unit=self.gpu, gtt=self.gtt) as mr:
+                                      gpu=self.gpu, gtt=self.gtt) as mr:
                             write_len = min(random.randint(1, MAX_IO_LEN),
                                             mr_len)
                             mr.write('a' * write_len, write_len)
@@ -580,7 +537,7 @@ class DmaBufMRTest(PyverbsAPITestCase):
                 for f in flags:
                     for mr_off in [0, mr_len//2]:
                         with DmaBufMR(pd, mr_len, f, offset=mr_off,
-                                      unit=self.gpu, gtt=self.gtt) as mr:
+                                      gpu=self.gpu, gtt=self.gtt) as mr:
                             write_len = min(random.randint(1, MAX_IO_LEN),
                                             mr_len)
                             write_str = 'a' * write_len
@@ -600,7 +557,7 @@ class DmaBufMRTest(PyverbsAPITestCase):
             length = u.get_mr_length()
             flags = u.get_dmabuf_access_flags(self.ctx)
             for f in flags:
-                with DmaBufMR(pd, length, f, unit=self.gpu,
+                with DmaBufMR(pd, length, f, gpu=self.gpu,
                               gtt=self.gtt) as mr:
                     mr.lkey
 
@@ -614,7 +571,7 @@ class DmaBufMRTest(PyverbsAPITestCase):
             length = u.get_mr_length()
             flags = u.get_dmabuf_access_flags(self.ctx)
             for f in flags:
-                with DmaBufMR(pd, length, f, unit=self.gpu,
+                with DmaBufMR(pd, length, f, gpu=self.gpu,
                               gtt=self.gtt) as mr:
                     mr.rkey
 
@@ -656,45 +613,23 @@ class DmaBufTestCase(RDMATestCase):
         self.gpu = self.config['gpu']
         self.gtt = self.config['gtt']
 
-    def create_players(self, resource, **resource_arg):
-        """
-        Init dma-buf tests resources.
-        :param resource: The RDMA resources to use. A class of type
-                         BaseResources.
-        :param resource_arg: Dict of args that specify the resource specific
-                             attributes.
-        :return: The (client, server) resources.
-        """
-        client = resource(**self.dev_info, **resource_arg)
-        server = resource(**self.dev_info, **resource_arg)
-        client.pre_run(server.psns, server.qps_num)
-        server.pre_run(client.psns, client.qps_num)
-        return client, server
-
     def test_dmabuf_rc_traffic(self):
         """
         Test send/recv using dma-buf MR over RC
         """
-        client, server = self.create_players(DmaBufRC, gpu=self.gpu,
-                                             gtt=self.gtt)
-        u.traffic(client, server, self.iters, self.gid_index, self.ib_port)
+        self.create_players(DmaBufRC, gpu=self.gpu, gtt=self.gtt)
+        u.traffic(**self.traffic_args)
 
     def test_dmabuf_rdma_traffic(self):
         """
         Test rdma write using dma-buf MR
         """
-        client, server = self.create_players(DmaBufRC, gpu=self.gpu,
-                                             gtt=self.gtt)
-        server.rkey = client.mr.rkey
-        server.remote_addr = client.mr.offset
-        client.rkey = server.mr.rkey
-        client.remote_addr = server.mr.offset
-        u.rdma_traffic(client, server, self.iters, self.gid_index, self.ib_port,
-                       send_op=e.IBV_WR_RDMA_WRITE)
+        self.create_players(DmaBufRC, gpu=self.gpu, gtt=self.gtt)
+        u.rdma_traffic(**self.traffic_args, send_op=e.IBV_WR_RDMA_WRITE)
 
 
 class DeviceMemoryRes(RCResources):
-    def __init__(self, dev_name, ib_port, gid_index, remote_access=False):
+    def __init__(self, dev_name, ib_port, gid_index, remote_access=False, msg_size=1024):
         """
         Initialize DM resources based on RC resources that include RC
         QP.
@@ -702,17 +637,19 @@ class DeviceMemoryRes(RCResources):
         :param ib_port: IB port of the device to use.
         :param gid_index: Which GID index to use.
         :param remote_access: If True, enable remote access.
+        :param msg_size: Message size (default: 1024).
         """
         self.remote_access = remote_access
         super().__init__(dev_name=dev_name, ib_port=ib_port,
-                         gid_index=gid_index)
+                         gid_index=gid_index, msg_size=msg_size)
 
     def create_mr(self):
         try:
             self.dm = d.DM(self.ctx, d.AllocDmAttr(length=self.msg_size))
             access = e.IBV_ACCESS_ZERO_BASED | e.IBV_ACCESS_LOCAL_WRITE
             if self.remote_access:
-                access |= e.IBV_ACCESS_REMOTE_WRITE
+                access |= e.IBV_ACCESS_REMOTE_WRITE | e.IBV_ACCESS_REMOTE_READ | \
+                          e.IBV_ACCESS_REMOTE_ATOMIC
             self.mr = DMMR(self.pd, self.msg_size, access, self.dm, 0)
         except PyverbsRDMAError as ex:
             if ex.error_code == errno.EOPNOTSUPP:
@@ -723,7 +660,8 @@ class DeviceMemoryRes(RCResources):
         qp_attr = QPAttr(port_num=self.ib_port)
         qp_attr.qp_access_flags = e.IBV_ACCESS_LOCAL_WRITE
         if self.remote_access:
-            qp_attr.qp_access_flags |= e.IBV_ACCESS_REMOTE_WRITE
+            qp_attr.qp_access_flags |= e.IBV_ACCESS_REMOTE_WRITE | e.IBV_ACCESS_REMOTE_READ | \
+                                       e.IBV_ACCESS_REMOTE_ATOMIC
         return qp_attr
 
 
@@ -745,32 +683,6 @@ class DeviceMemoryTest(RDMATestCase):
         # test.
         self.set_env_variable('MLX5_SCATTER_TO_CQE', '0')
 
-    def create_players(self, resource, **resource_arg):
-        """
-        Init Device Memory tests resources.
-        :param resource: The RDMA resources to use.
-        :param resource_arg: Dict of args that specify the resource specific
-        attributes.
-        :return: None
-        """
-        self.client = resource(**self.dev_info, **resource_arg)
-        self.server = resource(**self.dev_info, **resource_arg)
-        self.client.pre_run(self.server.psns, self.server.qps_num)
-        self.server.pre_run(self.client.psns, self.client.qps_num)
-        self.sync_remote_attr()
-        self.traffic_args = {'client': self.client, 'server': self.server,
-                             'iters': self.iters, 'gid_idx': self.gid_index,
-                             'port': self.ib_port}
-
-    def sync_remote_attr(self):
-        """
-        Exchange the MR remote attributes between the server and the client.
-        """
-        self.server.rkey = self.client.mr.rkey
-        self.server.remote_addr = self.client.mr.buf
-        self.client.rkey = self.server.mr.rkey
-        self.client.remote_addr = self.server.mr.buf
-
     def test_dm_traffic(self):
         self.create_players(DeviceMemoryRes)
         u.traffic(**self.traffic_args)
@@ -778,3 +690,19 @@ class DeviceMemoryTest(RDMATestCase):
     def test_dm_remote_traffic(self):
         self.create_players(DeviceMemoryRes, remote_access=True)
         u.rdma_traffic(**self.traffic_args, send_op=e.IBV_WR_RDMA_WRITE)
+
+    def test_dm_remote_write_traffic_imm(self):
+        self.create_players(DeviceMemoryRes, remote_access=True)
+        u.traffic(**self.traffic_args, send_op=e.IBV_WR_RDMA_WRITE_WITH_IMM)
+
+    def test_dm_remote_read_traffic(self):
+        self.create_players(DeviceMemoryRes, remote_access=True)
+        u.rdma_traffic(**self.traffic_args, send_op=e.IBV_WR_RDMA_READ)
+
+    def test_dm_atomic_fetch_add(self):
+        self.create_players(DeviceMemoryRes, remote_access=True, msg_size=8)
+        u.atomic_traffic(**self.traffic_args, send_op=e.IBV_WR_ATOMIC_FETCH_AND_ADD)
+
+    def test_dm_atomic_cmp_swp(self):
+        self.create_players(DeviceMemoryRes, remote_access=True, msg_size=8)
+        u.atomic_traffic(**self.traffic_args, send_op=e.IBV_WR_ATOMIC_CMP_AND_SWP)

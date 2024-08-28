@@ -1,8 +1,5 @@
 .\" Man page generated from reStructuredText.
 .
-.TH IBPORTSTATE 8 "2013-03-26" "" "Open IB Diagnostics"
-.SH NAME
-IBPORTSTATE \- handle port (physical) state and link speed of an InfiniBand port
 .
 .nr rst2man-indent-level 0
 .
@@ -30,6 +27,9 @@ level margin: \\n[rst2man-indent\\n[rst2man-indent-level]]
 .\" new: \\n[rst2man-indent\\n[rst2man-indent-level]]
 .in \\n[rst2man-indent\\n[rst2man-indent-level]]u
 ..
+.TH "IBPORTSTATE" 8 "2013-03-26" "" "Open IB Diagnostics"
+.SH NAME
+IBPORTSTATE \- handle port (physical) state and link speed of an InfiniBand port
 .SH SYNOPSIS
 .sp
 ibportstate [options] <dest dr_path|lid|guid> <portnum> [<op>]
@@ -199,7 +199,7 @@ is specified then a value will be prompted for.
 .
 .INDENT 0.0
 .TP
-.B \-d
+.B  \-d
 raise the IB debugging level.
 May be used several times (\-ddd or \-d \-d \-d).
 .UNINDENT
@@ -207,7 +207,7 @@ May be used several times (\-ddd or \-d \-d \-d).
 .
 .INDENT 0.0
 .TP
-.B \-e
+.B  \-e
 show send and receive errors (timeouts and others)
 .UNINDENT
 .\" Define the common option -K
